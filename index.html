@@ -30,7 +30,6 @@
         const { useState, useEffect, useRef, useMemo } = React;
         
         // --- Icons Definitions (Embedded to remove external dependencies) ---
-        // これにより "Cannot read properties of undefined (reading 'forwardRef')" エラーを回避します
         const IconBase = ({ children, className, ...props }) => (
             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} {...props}>
                 {children}
@@ -67,6 +66,7 @@
             Grid3x3: (props) => <IconBase {...props}><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M3 15h18"/><path d="M9 3v18"/><path d="M15 3v18"/></IconBase>,
             MousePointer2: (props) => <IconBase {...props}><path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z"/><path d="M13 13l6 6"/></IconBase>,
             PenTool: (props) => <IconBase {...props}><path d="m12 19 7-7 3 3-7 7-3-3z"/><path d="m18 13-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/><path d="m2 2 7.586 7.586"/><circle cx="11" cy="11" r="2"/></IconBase>,
+            Book: (props) => <IconBase {...props}><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></IconBase>,
         };
 
         // --- Types & Helpers ---
@@ -117,10 +117,10 @@
                 simNote: 'スケールを大きく変化させるとコーナーを認識できなくなります。',
                 opencv: "dst = cv2.cornerHarris(gray, 2, 3, 0.04)",
                 steps: [
-                { title: "微分画像の計算", desc: "画像のX方向・Y方向の勾配(Ix, Iy)をSobelフィルタ等で計算します。" },
-                { title: "構造テンソルの生成", desc: "各画素の周辺ウィンドウ内で、勾配の積の和(Ix², Iy², IxIy)を計算し、行列Mを作ります。" },
+                { title: "微分画像の計算", desc: "画像のX方向・Y方向の勾配(Ix, Iy)をSobelフィルタ等で計算します。平坦な場所は0、エッジ部分は大きな値になります。" },
+                { title: "構造テンソルの生成", desc: "各画素の周辺ウィンドウ内で、勾配の積の和(Ix², Iy², IxIy)を計算し、行列Mを作ります。これで「どの方向に輝度が変化しているか」を要約します。" },
                 { title: "コーナー応答値Rの計算", desc: "行列Mの固有値を直接求めず、行列式とトレースを用いてスコアRを算出します(R = det(M) - k(trace(M))²)。" },
-                { title: "閾値処理", desc: "スコアRが閾値より大きい画素をコーナーとして抽出します。" }
+                { title: "閾値処理", desc: "スコアRが閾値より大きい画素をコーナーとして抽出します。Rが負ならエッジ、0付近なら平坦とみなされます。" }
                 ]
             },
             {
@@ -144,8 +144,8 @@
                 simNote: '非常に高速ですが、回転やスケール変化で特徴点が不安定になります。',
                 opencv: "fast = cv2.FastFeatureDetector_create()\\nkp = fast.detect(gray, None)",
                 steps: [
-                { title: "注目画素の選定", desc: "画像内の画素Pを選択し、その輝度Ipを取得します。" },
-                { title: "円周上の画素比較", desc: "Pを中心とする半径3の円周上にある16個の画素の輝度を調査します。" },
+                { title: "注目画素の選定", desc: "画像内の画素Pを選択し、その輝度Ipを取得します。これを基準として周囲と比較します。" },
+                { title: "円周上の画素比較", desc: "Pを中心とする半径3の円周上にある16個の画素の輝度を調査します。円周上の各画素がIpより「明るい」か「暗い」か判定します。" },
                 { title: "連続性のテスト", desc: "Ipより「明るい」または「暗い」画素が、円周上でN個（通常9〜12個）連続しているか判定します。" },
                 { title: "高速化", desc: "全16画素を見ずに、まず上下左右の4点で可能性を棄却するなどの最適化が行われています。" }
                 ]
@@ -712,7 +712,7 @@
         };
 
         const FeatureComparisonApp = () => {
-            const [activeTab, setActiveTab] = useState('info');
+            const [activeTab, setActiveTab] = useState('overview');
             const [selectedAlgoId, setSelectedAlgoId] = useState(null);
             
             const [simAlgoId, setSimAlgoId] = useState('harris');
@@ -758,9 +758,10 @@
                         <div className="flex justify-center mb-6 overflow-x-auto">
                             <div className="bg-white p-1 rounded-lg shadow border inline-flex whitespace-nowrap">
                                 {[
-                                    { id: 'info', icon: <Icons.Info className="w-4 h-4"/>, label: '解説・比較' },
-                                    { id: 'relation', icon: <Icons.GitMerge className="w-4 h-4"/>, label: '関係性マップ' },
-                                    { id: 'learn', icon: <Icons.BookOpen className="w-4 h-4"/>, label: '仕組みを学ぶ (実験室)' },
+                                    { id: 'overview', icon: <Icons.Book className="w-4 h-4"/>, label: '概要' },
+                                    { id: 'info', icon: <Icons.Info className="w-4 h-4"/>, label: '比較マップ' },
+                                    { id: 'relation', icon: <Icons.GitMerge className="w-4 h-4"/>, label: '関係性' },
+                                    { id: 'learn', icon: <Icons.BookOpen className="w-4 h-4"/>, label: '仕組みを学ぶ' },
                                     { id: 'sim', icon: <Icons.Activity className="w-4 h-4"/>, label: 'シミュレーション' },
                                 ].map(tab => (
                                     <button key={tab.id} onClick={() => setActiveTab(tab.id)}
@@ -770,6 +771,150 @@
                                 ))}
                             </div>
                         </div>
+
+                        {activeTab === 'overview' && (
+                            <div className="animate-in fade-in duration-500 max-w-4xl mx-auto space-y-8">
+                                <div className="bg-white p-8 rounded-xl shadow-lg border border-gray-100">
+                                    <h2 className="text-2xl font-bold text-indigo-900 mb-4 border-b pb-2">アルゴリズムの分類と役割</h2>
+                                    <p className="text-gray-700 leading-relaxed mb-6">
+                                        特徴点マッチングのプロセスは、「どこを見るか（検出）」と「どう表現するか（記述）」の2段階に分かれます。<br/>
+                                        アルゴリズムには、片方の機能しか持たないものと、両方をセットで行う「統合型」があります。
+                                    </p>
+                                    
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+                                        <div className="bg-blue-50 p-5 rounded-lg border border-blue-100">
+                                            <h3 className="text-lg font-bold text-blue-800 mb-2 flex items-center gap-2">
+                                                <Icons.Target className="w-5 h-5"/> 検出器 (Detector)
+                                            </h3>
+                                            <p className="text-xs font-bold text-blue-600 mb-2 uppercase">場所を見つける</p>
+                                            <p className="text-sm text-gray-600">
+                                                「ここが特徴的だ！」という座標(x, y)を見つけるのが仕事です。<br/>
+                                                <span className="font-bold text-gray-700">代表例: Harris, FAST</span>
+                                            </p>
+                                        </div>
+                                        <div className="bg-green-50 p-5 rounded-lg border border-green-100">
+                                            <h3 className="text-lg font-bold text-green-800 mb-2 flex items-center gap-2">
+                                                <Icons.FileText className="w-5 h-5"/> 記述子 (Descriptor)
+                                            </h3>
+                                            <p className="text-xs font-bold text-green-600 mb-2 uppercase">特徴を数値化する</p>
+                                            <p className="text-sm text-gray-600">
+                                                渡された座標の見た目を数値データ（ベクトル）に変換するのが仕事です。場所を探す能力はありません。<br/>
+                                                <span className="font-bold text-gray-700">代表例: BRIEF</span>
+                                            </p>
+                                        </div>
+                                        <div className="bg-purple-50 p-5 rounded-lg border border-purple-100">
+                                            <h3 className="text-lg font-bold text-purple-800 mb-2 flex items-center gap-2">
+                                                <Icons.Layers className="w-5 h-5"/> 統合型 (Integrated)
+                                            </h3>
+                                            <p className="text-xs font-bold text-purple-600 mb-2 uppercase">オールインワン</p>
+                                            <p className="text-sm text-gray-600">
+                                                検出と記述の両方を独自のアルゴリズムで行います。相性の良い組み合わせで設計されています。<br/>
+                                                <span className="font-bold text-gray-700">代表例: SIFT, ORB</span>
+                                            </p>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="bg-white p-8 rounded-xl shadow-lg border border-gray-100">
+                                    <h2 className="text-2xl font-bold text-indigo-900 mb-4 border-b pb-2">マッチングと閾値 (Threshold)</h2>
+                                    <div className="flex flex-col md:flex-row gap-8 items-center">
+                                        <div className="flex-1 space-y-4">
+                                            <p className="text-sm text-gray-600 leading-relaxed">
+                                                2つの画像間で「同じ点」を見つけるには、それぞれの点で作った<strong>記述子（数値の列）同士の『距離』</strong>を計算します。
+                                            </p>
+                                            <ul className="list-disc pl-5 text-sm text-gray-600 space-y-2">
+                                                <li><strong>距離が近い（0に近い）</strong>： 特徴がよく似ている（同じ点の可能性が高い）。</li>
+                                                <li><strong>距離が遠い</strong>： 特徴が似ていない（違う点の可能性が高い）。</li>
+                                            </ul>
+                                            <div className="bg-amber-50 p-4 rounded-lg border border-amber-200 mt-4">
+                                                <h4 className="font-bold text-amber-800 text-sm mb-2 flex items-center gap-2">
+                                                    <Icons.Settings className="w-4 h-4"/> 閾値 (Threshold) の重要性
+                                                </h4>
+                                                <p className="text-xs text-amber-800 leading-relaxed">
+                                                    「距離がいくつ以下なら『同じ』とみなすか？」の基準値を<strong>閾値</strong>と呼びます。<br/>
+                                                    <br/>
+                                                    <strong>閾値が厳しすぎる（低い）と...</strong><br/>
+                                                    確実なペアしか残らないが、正解も見逃してしまう（検出漏れ）。<br/>
+                                                    <br/>
+                                                    <strong>閾値が甘すぎる（高い）と...</strong><br/>
+                                                    たくさんのペアが見つかるが、全然違う点同士を誤って結んでしまう（誤検出）。
+                                                </p>
+                                            </div>
+                                        </div>
+                                        <div className="w-full md:w-1/3 bg-gray-50 p-4 rounded-lg border border-gray-200 flex flex-col items-center justify-center text-center">
+                                            <div className="flex items-center gap-4 mb-2">
+                                                <div className="w-12 h-12 bg-blue-100 rounded border border-blue-300 flex items-center justify-center text-xs font-mono">
+                                                    [0.1,<br/>0.5,<br/>...]
+                                                </div>
+                                                <div className="h-0.5 w-8 bg-gray-300 relative">
+                                                    <div className="absolute -top-3 left-1/2 -translate-x-1/2 text-[9px] text-gray-500">距離</div>
+                                                </div>
+                                                <div className="w-12 h-12 bg-green-100 rounded border border-green-300 flex items-center justify-center text-xs font-mono">
+                                                    [0.2,<br/>0.4,<br/>...]
+                                                </div>
+                                            </div>
+                                            <div className="text-xs text-gray-500 mb-2">距離 = 15.3</div>
+                                            <div className="w-full h-px bg-gray-300 my-2"></div>
+                                            <div className="text-xs font-bold text-indigo-700">閾値 = 20.0</div>
+                                            <div className="text-xs text-green-600 font-bold mt-1">15.3 &lt; 20.0 → マッチ成功！<Icons.Check className="inline w-3 h-3"/></div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <div className="bg-white p-6 rounded-xl shadow border border-gray-100">
+                                        <h3 className="text-xl font-bold text-gray-800 mb-3 flex items-center gap-2">
+                                            <Icons.Target className="w-5 h-5 text-blue-500"/> Harris Corner 手法
+                                        </h3>
+                                        <p className="text-sm text-gray-600 leading-relaxed">
+                                            「窓を少しずらしたとき、画素値がどう変化するか」を数学的に解析する手法です。<br/>
+                                            平坦な場所では変化がなく、エッジでは一方向に変化しますが、コーナー（角）では全方向に大きく変化します。この性質を利用して、回転しても変わらない（不変な）特徴点を見つけ出します。
+                                        </p>
+                                    </div>
+                                    <div className="bg-white p-6 rounded-xl shadow border border-gray-100">
+                                        <h3 className="text-xl font-bold text-gray-800 mb-3 flex items-center gap-2">
+                                            <Icons.Zap className="w-5 h-5 text-yellow-500"/> FAST 手法
+                                        </h3>
+                                        <p className="text-sm text-gray-600 leading-relaxed">
+                                            名前の通り「速さ」に特化した手法です。複雑な計算を避け、注目画素の周りの円周上の画素だけをチェックします。<br/>
+                                            「連続して明るい（または暗い）画素がN個以上続いているか」という単純なルールだけで判定するため、動画処理やリアルタイム制御で非常に重宝されます。
+                                        </p>
+                                    </div>
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                    <div className="bg-white p-6 rounded-xl shadow border border-gray-100">
+                                        <h3 className="text-xl font-bold text-gray-800 mb-3 flex items-center gap-2">
+                                            <Icons.Shield className="w-5 h-5 text-purple-500"/> SIFT 手法
+                                        </h3>
+                                        <p className="text-sm text-gray-600 leading-relaxed">
+                                            「画像の拡大縮小」や「回転」に対して非常に強い、特徴点検出の王様的存在です（かつては特許技術でした）。<br/>
+                                            画像をわざとぼかした画像を何枚も作り（DoG）、それらの差分から安定した点を見つけます。計算コストは高いですが、高い精度を誇ります。
+                                        </p>
+                                    </div>
+
+                                    <div className="bg-white p-6 rounded-xl shadow border border-gray-100">
+                                        <h3 className="text-xl font-bold text-gray-800 mb-3 flex items-center gap-2">
+                                            <Icons.Camera className="w-5 h-5 text-green-500"/> BRIEF 手法
+                                        </h3>
+                                        <p className="text-sm text-gray-600 leading-relaxed">
+                                            特徴を「0と1の数字の列（ビット列）」で表現することに特化した記述子です。<br/>
+                                            特徴点周辺の2点の明るさを比較して「AよりBが明るければ1」といった単純なテストを繰り返します。非常に高速ですが、回転すると結果が変わってしまう弱点があります。
+                                        </p>
+                                    </div>
+
+                                    <div className="bg-white p-6 rounded-xl shadow border border-gray-100">
+                                        <h3 className="text-xl font-bold text-gray-800 mb-3 flex items-center gap-2">
+                                            <Icons.Maximize className="w-5 h-5 text-red-500"/> ORB 手法
+                                        </h3>
+                                        <p className="text-sm text-gray-600 leading-relaxed">
+                                            「FAST（検出）」と「BRIEF（記述）」を改良・合体させ、SIFTの無料かつ高速な代替案として開発されました。<br/>
+                                            FASTに「向き」の概念を加え、BRIEFをその向きに合わせて回転させることで、弱点だった回転耐性を克服しています。
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
 
                         {activeTab === 'info' && (
                             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-in fade-in duration-500">
