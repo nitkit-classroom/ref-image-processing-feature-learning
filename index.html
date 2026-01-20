@@ -15,9 +15,8 @@
     <!-- Babel (for JSX) -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     
-    <!-- Lucide Icons (UMD) -->
-    <script src="https://unpkg.com/lucide@latest"></script>
-    <script src="https://unpkg.com/lucide-react@latest/dist/umd/lucide-react.min.js"></script>
+    <!-- Lucide Icons (Fixed Version for Stability) -->
+    <script src="https://unpkg.com/lucide-react@0.263.1/dist/umd/lucide-react.min.js"></script>
 
     <style>
         /* Custom scrollbar for better look */
@@ -25,40 +24,64 @@
         ::-webkit-scrollbar-track { background: #f1f1f1; }
         ::-webkit-scrollbar-thumb { background: #c7c7cc; border-radius: 4px; }
         ::-webkit-scrollbar-thumb:hover { background: #a1a1aa; }
-        body { background-color: #f9fafb; }
+        body { background-color: #f9fafb; font-family: sans-serif; }
     </style>
 </head>
 <body>
     <div id="root"></div>
 
     <script type="text/babel">
-        // Import components from global variables provided by UMD builds
+        // --- Global Error Safety Check ---
+        if (typeof React === 'undefined' || typeof ReactDOM === 'undefined') {
+            document.body.innerHTML = '<div style="padding:20px; color:red;">Error: React libraries failed to load. Please check your internet connection.</div>';
+            throw new Error("React not loaded");
+        }
+
         const { useState, useEffect, useRef, useMemo } = React;
-        // lucide-react exports icons as properties of the global 'lucideReact' object
+        
+        // Safely access Lucide icons
+        const lucide = window.lucideReact || {};
         const { 
             Camera, Zap, Shield, Move, Maximize, Target, Info, Check, X, Minus, 
             Play, Settings, Activity, RotateCw, ZoomIn, RefreshCw, BookOpen, Code, 
             ArrowRight, GitMerge, ArrowDown, Plus, Layers, Search, FileText, 
             Calculator, Grid3x3, MousePointer2, PenTool 
-        } = lucideReact;
+        } = lucide;
 
-        // --- Types & Helpers for Interactive Playground ---
-        // type GridData = number[][]; // TypeScript types removed for Babel standalone
+        // Fallback for missing icons to prevent crash
+        const IconFallback = () => <span style={{width:16, height:16, display:'inline-block', background:'#ccc'}}></span>;
+        
+        const SafeIcon = (IconComponent) => {
+            return IconComponent ? IconComponent : IconFallback;
+        };
 
+        // Wrap used icons
+        const Icons = {
+            Camera: SafeIcon(Camera), Zap: SafeIcon(Zap), Shield: SafeIcon(Shield), 
+            Move: SafeIcon(Move), Maximize: SafeIcon(Maximize), Target: SafeIcon(Target), 
+            Info: SafeIcon(Info), Check: SafeIcon(Check), X: SafeIcon(X), Minus: SafeIcon(Minus), 
+            Play: SafeIcon(Play), Settings: SafeIcon(Settings), Activity: SafeIcon(Activity), 
+            RotateCw: SafeIcon(RotateCw), ZoomIn: SafeIcon(ZoomIn), RefreshCw: SafeIcon(RefreshCw), 
+            BookOpen: SafeIcon(BookOpen), Code: SafeIcon(Code), ArrowRight: SafeIcon(ArrowRight), 
+            GitMerge: SafeIcon(GitMerge), ArrowDown: SafeIcon(ArrowDown), Plus: SafeIcon(Plus), 
+            Layers: SafeIcon(Layers), Search: SafeIcon(Search), FileText: SafeIcon(FileText), 
+            Calculator: SafeIcon(Calculator), Grid3x3: SafeIcon(Grid3x3), 
+            MousePointer2: SafeIcon(MousePointer2), PenTool: SafeIcon(PenTool)
+        };
+
+        // --- Types & Helpers ---
         const createGrid = (size, fill) => {
             return Array(size).fill(0).map((_, y) => Array(size).fill(0).map((_, x) => 
                 typeof fill === 'function' ? fill(x, y) : fill
             ));
         };
 
-        // 7x7 Sample for L-corner
         const initialHarrisGrid = createGrid(7, (x, y) => {
-            if (x < 3 && y < 3) return 50;  // Top-Left Dark
-            if (x >= 3 || y >= 3) return 200; // Bottom-Right Bright
+            if (x < 3 && y < 3) return 50;
+            if (x >= 3 || y >= 3) return 200;
             return 50;
         });
 
-        // 7x7 Sample for FAST
         const initialFastGrid = createGrid(7, (x, y) => {
             const cx = 3, cy = 3;
             const isCircle = 
@@ -89,15 +112,15 @@
                 cons: ['スケール変化に弱い', '計算コストが少し高い', 'サブピクセル精度は追加処理が必要'],
                 visualStyle: 'corner',
                 simSpeed: 15,
-                icon: <Target className="w-6 h-6 text-blue-500" />,
+                icon: <Icons.Target className="w-6 h-6 text-blue-500" />,
                 color: 'bg-blue-50 border-blue-200',
                 simNote: 'スケールを大きく変化させるとコーナーを認識できなくなります。',
                 opencv: "dst = cv2.cornerHarris(gray, 2, 3, 0.04)",
                 steps: [
-                { title: "微分画像の計算", desc: "画像のX方向・Y方向の勾配(Ix, Iy)をSobelフィルタ等で計算します。平坦な場所は0、エッジ部分は大きな値になります。" },
-                { title: "構造テンソルの生成", desc: "各画素の周辺ウィンドウ内で、勾配の積の和(Ix², Iy², IxIy)を計算し、行列Mを作ります。これで「どの方向に輝度が変化しているか」を要約します。" },
+                { title: "微分画像の計算", desc: "画像のX方向・Y方向の勾配(Ix, Iy)をSobelフィルタ等で計算します。" },
+                { title: "構造テンソルの生成", desc: "各画素の周辺ウィンドウ内で、勾配の積の和(Ix², Iy², IxIy)を計算し、行列Mを作ります。" },
                 { title: "コーナー応答値Rの計算", desc: "行列Mの固有値を直接求めず、行列式とトレースを用いてスコアRを算出します(R = det(M) - k(trace(M))²)。" },
-                { title: "閾値処理", desc: "スコアRが閾値より大きい画素をコーナーとして抽出します。Rが負ならエッジ、0付近なら平坦とみなされます。" }
+                { title: "閾値処理", desc: "スコアRが閾値より大きい画素をコーナーとして抽出します。" }
                 ]
             },
             {
@@ -116,13 +139,13 @@
                 cons: ['ノイズに弱い場合がある', '回転・スケール不変性がない', 'エッジ上の点も検出しやすい'],
                 visualStyle: 'point',
                 simSpeed: 2,
-                icon: <Zap className="w-6 h-6 text-yellow-500" />,
+                icon: <Icons.Zap className="w-6 h-6 text-yellow-500" />,
                 color: 'bg-yellow-50 border-yellow-200',
                 simNote: '非常に高速ですが、回転やスケール変化で特徴点が不安定になります。',
                 opencv: "fast = cv2.FastFeatureDetector_create()\\nkp = fast.detect(gray, None)",
                 steps: [
-                { title: "注目画素の選定", desc: "画像内の画素Pを選択し、その輝度Ipを取得します。これを基準として周囲と比較します。" },
-                { title: "円周上の画素比較", desc: "Pを中心とする半径3の円周上にある16個の画素の輝度を調査します。円周上の各画素がIpより「明るい」か「暗い」か判定します。" },
+                { title: "注目画素の選定", desc: "画像内の画素Pを選択し、その輝度Ipを取得します。" },
+                { title: "円周上の画素比較", desc: "Pを中心とする半径3の円周上にある16個の画素の輝度を調査します。" },
                 { title: "連続性のテスト", desc: "Ipより「明るい」または「暗い」画素が、円周上でN個（通常9〜12個）連続しているか判定します。" },
                 { title: "高速化", desc: "全16画素を見ずに、まず上下左右の4点で可能性を棄却するなどの最適化が行われています。" }
                 ]
@@ -143,7 +166,7 @@
                 cons: ['計算負荷が非常に高い', '特許で保護されていた（現在は失効）', 'リアルタイム処理には不向き'],
                 visualStyle: 'vector_circle',
                 simSpeed: 80,
-                icon: <Shield className="w-6 h-6 text-purple-500" />,
+                icon: <Icons.Shield className="w-6 h-6 text-purple-500" />,
                 color: 'bg-purple-50 border-purple-200',
                 simNote: 'どのような変形を加えても安定して追従しますが、処理時間が長くなります。',
                 opencv: "sift = cv2.SIFT_create()\\nkp, des = sift.detectAndCompute(gray, None)",
@@ -170,7 +193,7 @@
                 cons: ['回転・スケール不変性がない', '単体では特徴点検出機能を持たない'],
                 visualStyle: 'binary_match',
                 simSpeed: 4,
-                icon: <Camera className="w-6 h-6 text-green-500" />,
+                icon: <Icons.Camera className="w-6 h-6 text-green-500" />,
                 color: 'bg-green-50 border-green-200',
                 simNote: '回転させるとビットパターンが変化し、マッチングに失敗します（赤色表示）。',
                 opencv: "brief = cv2.xfeatures2d.BriefDescriptorExtractor_create()\\n# FAST等でkpを検出後に使用\\nkp, des = brief.compute(gray, kp)",
@@ -197,7 +220,7 @@
                 cons: ['SIFTほどの極端な変形耐性はない', 'エイリアシングの影響を受けやすい'],
                 visualStyle: 'vector_fast',
                 simSpeed: 10,
-                icon: <Maximize className="w-6 h-6 text-red-500" />,
+                icon: <Icons.Maximize className="w-6 h-6 text-red-500" />,
                 color: 'bg-red-50 border-red-200',
                 simNote: 'SIFT同様に追従しつつ、処理速度も高速に保たれます。',
                 opencv: "orb = cv2.ORB_create()\\nkp, des = orb.detectAndCompute(gray, None)",
@@ -210,8 +233,7 @@
             }
         ];
 
-        // --- Components ---
-
+        // --- Visual Components ---
         const StepVisual = ({ algoId, stepIndex }) => {
             const commonClass = "w-full h-24 bg-white border border-gray-100 rounded-md flex items-center justify-center relative overflow-hidden";
             
@@ -222,8 +244,8 @@
                     <div className={commonClass}>
                     <div className="grid grid-cols-3 gap-1 opacity-20 absolute w-full h-full"><div className="bg-gray-200"></div><div className="bg-gray-300"></div><div className="bg-gray-200"></div></div>
                     <div className="z-10 flex gap-4">
-                        <div className="flex flex-col items-center"><span className="text-xs font-bold">X微分</span><ArrowRight className="w-6 h-6 text-blue-500" /></div>
-                        <div className="flex flex-col items-center"><span className="text-xs font-bold">Y微分</span><ArrowRight className="w-6 h-6 text-blue-500 rotate-90" /></div>
+                        <div className="flex flex-col items-center"><span className="text-xs font-bold">X微分</span><Icons.ArrowRight className="w-6 h-6 text-blue-500" /></div>
+                        <div className="flex flex-col items-center"><span className="text-xs font-bold">Y微分</span><Icons.ArrowRight className="w-6 h-6 text-blue-500 rotate-90" /></div>
                     </div>
                     </div>
                 );
@@ -350,8 +372,8 @@
                         <div className="w-16 h-12 bg-gray-400 rounded shadow-sm z-30 opacity-70 transform translate-x-2"></div>
                         <div className="w-16 h-12 bg-gray-200 rounded shadow-sm z-40 transform translate-x-3 border border-gray-400 flex items-center justify-center text-[8px]">DoG</div>
                         </div>
-                        <ArrowRight className="w-4 h-4 text-gray-400" />
-                        <Target className="w-6 h-6 text-purple-600 animate-bounce" />
+                        <Icons.ArrowRight className="w-4 h-4 text-gray-400" />
+                        <Icons.Target className="w-6 h-6 text-purple-600 animate-bounce" />
                     </div>
                     </div>
                 );
@@ -377,7 +399,7 @@
                     <div className="grid grid-cols-4 grid-rows-4 w-16 h-16 border border-gray-300 bg-white">
                         {Array(16).fill(0).map((_,i) => (
                         <div key={i} className="border-[0.5px] border-gray-100 flex items-center justify-center">
-                            <ArrowRight className="w-2 h-2 text-purple-600" style={{transform: `rotate(${Math.random()*360}deg)`}} />
+                            <Icons.ArrowRight className="w-2 h-2 text-purple-600" style={{transform: `rotate(${Math.random()*360}deg)`}} />
                         </div>
                         ))}
                     </div>
@@ -425,7 +447,7 @@
                         <div className="w-8 h-8 bg-gray-300 rounded text-gray-800 flex items-center justify-center text-xs">P2</div>
                         <span className="text-[10px] mt-1">200</span>
                         </div>
-                        <ArrowRight className="w-4 h-4 text-gray-400 mx-1" />
+                        <Icons.ArrowRight className="w-4 h-4 text-gray-400 mx-1" />
                         <div className="w-8 h-8 bg-green-100 border border-green-500 text-green-700 rounded flex items-center justify-center font-bold">1</div>
                     </div>
                     </div>
@@ -482,7 +504,7 @@
                             <div className="bg-red-500 w-1 h-1 rounded-full"></div>
                             </div>
                         </div>
-                        <RotateCw className="absolute -top-1 -right-1 w-4 h-4 text-gray-500" />
+                        <Icons.RotateCw className="absolute -top-1 -right-1 w-4 h-4 text-gray-500" />
                     </div>
                     <div className="ml-3 text-[10px] text-gray-500 flex flex-col">
                         <span>Steered</span>
@@ -496,7 +518,7 @@
             // Fallback generic visual
             return (
                 <div className={commonClass}>
-                <Activity className="w-6 h-6 text-gray-300" />
+                <Icons.Activity className="w-6 h-6 text-gray-300" />
                 <span className="text-xs text-gray-400 ml-2">Processing...</span>
                 </div>
             );
@@ -505,6 +527,7 @@
         const GridCell = ({ value, x, y, onChange, readOnly, bgClass }) => {
             const [strVal, setStrVal] = useState(value.toString());
 
+            // Sync with prop only if effectively different to prevent typing glitches
             useEffect(() => {
                 const currentParsed = strVal === '' ? 0 : parseInt(strVal, 10);
                 if (!isNaN(currentParsed) && currentParsed !== value) {
@@ -514,8 +537,11 @@
 
             const handleChange = (e) => {
                 const val = e.target.value;
+                // Allow digits and empty string
                 if (val !== '' && !/^\d+$/.test(val)) return;
+                
                 setStrVal(val);
+                
                 if (onChange) {
                     const numVal = val === '' ? 0 : Math.max(0, Math.min(255, parseInt(val, 10)));
                     onChange(x, y, numVal);
@@ -597,7 +623,7 @@
             return (
                 <div className="flex flex-col md:flex-row gap-6 mt-4 p-4 bg-blue-50/50 rounded-lg border border-blue-100">
                     <div>
-                        <h5 className="text-xs font-bold text-gray-600 mb-2 flex items-center gap-1"><PenTool className="w-3 h-3"/> 入力画像 (7x7)</h5>
+                        <h5 className="text-xs font-bold text-gray-600 mb-2 flex items-center gap-1"><Icons.PenTool className="w-3 h-3"/> 入力画像 (7x7)</h5>
                         <EditableGrid data={grid} onChange={setGrid} highlightIndices={[{x:3, y:3, color: 'bg-yellow-100 ring-2 ring-yellow-400 inset'}]} />
                     </div>
                     <div className="flex-1 space-y-3">
@@ -657,7 +683,7 @@
             return (
                 <div className="flex flex-col md:flex-row gap-6 mt-4 p-4 bg-yellow-50/50 rounded-lg border border-yellow-100">
                     <div>
-                        <h5 className="text-xs font-bold text-gray-600 mb-2 flex items-center gap-1"><PenTool className="w-3 h-3"/> 入力画像</h5>
+                        <h5 className="text-xs font-bold text-gray-600 mb-2 flex items-center gap-1"><Icons.PenTool className="w-3 h-3"/> 入力画像</h5>
                         <EditableGrid data={grid} onChange={setGrid} highlightIndices={[
                             {x: cx, y: cy, color: 'bg-yellow-200 ring-2 ring-yellow-500'},
                             ...circlePixels.map(p => ({x: p.x, y: p.y, color: p.status === 'brighter' ? 'bg-red-100 text-red-600' : p.status === 'darker' ? 'bg-blue-100 text-blue-600' : 'bg-gray-50'}))
@@ -700,9 +726,9 @@
                 <div className="mt-4 p-4 bg-purple-50/50 rounded-lg border border-purple-100">
                     <div className="flex justify-center gap-2 mb-4 text-center">
                         <div><div className="text-[9px] text-gray-500">Scale 1</div><EditableGrid data={scale1} onChange={setScale1} /></div>
-                        <div className="flex items-center text-gray-400"><Minus className="w-4 h-4"/></div>
+                        <div className="flex items-center text-gray-400"><Icons.Minus className="w-4 h-4"/></div>
                         <div><div className="text-[9px] text-gray-500">Scale 2</div><EditableGrid data={scale2} onChange={setScale2} /></div>
-                        <div className="flex items-center text-gray-400"><ArrowRight className="w-4 h-4"/></div>
+                        <div className="flex items-center text-gray-400"><Icons.ArrowRight className="w-4 h-4"/></div>
                         <div><div className="text-[9px] text-purple-700 font-bold">DoG</div><EditableGrid data={dogGrid} readOnly highlightIndices={isExtr ? [{x:2, y:2, color: 'bg-purple-200 ring-2 ring-purple-500'}] : []} /></div>
                     </div>
                     <div className={`text-center text-xs font-bold ${isExtr ? 'text-green-600' : 'text-gray-400'}`}>
@@ -856,8 +882,8 @@
             const renderAlgoRow = (algo) => (
                 <tr key={algo.id} onClick={() => setSelectedAlgoId(algo.id)} className={`cursor-pointer hover:bg-indigo-50 ${selectedAlgoId === algo.id ? 'bg-indigo-50' : ''}`}>
                     <td className="px-4 py-2 font-bold text-indigo-900 flex items-center gap-2">{algo.icon}{algo.name}</td>
-                    <td className="px-4 py-2 text-center">{algo.rotationInvariant ? <Check className="w-4 h-4 mx-auto text-green-500"/> : <X className="w-4 h-4 mx-auto text-red-400"/>}</td>
-                    <td className="px-4 py-2 text-center">{algo.scaleInvariant ? <Check className="w-4 h-4 mx-auto text-green-500"/> : <X className="w-4 h-4 mx-auto text-red-400"/>}</td>
+                    <td className="px-4 py-2 text-center">{algo.rotationInvariant ? <Icons.Check className="w-4 h-4 mx-auto text-green-500"/> : <Icons.X className="w-4 h-4 mx-auto text-red-400"/>}</td>
+                    <td className="px-4 py-2 text-center">{algo.scaleInvariant ? <Icons.Check className="w-4 h-4 mx-auto text-green-500"/> : <Icons.X className="w-4 h-4 mx-auto text-red-400"/>}</td>
                     <td className="px-4 py-2 text-xs text-gray-500 hidden sm:table-cell">{algo.simSpeed < 10 ? "超高速" : "中〜低速"}</td>
                 </tr>
             );
@@ -873,10 +899,10 @@
                         <div className="flex justify-center mb-6 overflow-x-auto">
                             <div className="bg-white p-1 rounded-lg shadow border inline-flex whitespace-nowrap">
                                 {[
-                                    { id: 'info', icon: <Info className="w-4 h-4"/>, label: '解説・比較' },
-                                    { id: 'relation', icon: <GitMerge className="w-4 h-4"/>, label: '関係性マップ' },
-                                    { id: 'learn', icon: <BookOpen className="w-4 h-4"/>, label: '仕組みを学ぶ (実験室)' },
-                                    { id: 'sim', icon: <Activity className="w-4 h-4"/>, label: 'シミュレーション' },
+                                    { id: 'info', icon: <Icons.Info className="w-4 h-4"/>, label: '解説・比較' },
+                                    { id: 'relation', icon: <Icons.GitMerge className="w-4 h-4"/>, label: '関係性マップ' },
+                                    { id: 'learn', icon: <Icons.BookOpen className="w-4 h-4"/>, label: '仕組みを学ぶ (実験室)' },
+                                    { id: 'sim', icon: <Icons.Activity className="w-4 h-4"/>, label: 'シミュレーション' },
                                 ].map(tab => (
                                     <button key={tab.id} onClick={() => setActiveTab(tab.id)}
                                         className={`px-4 py-2 rounded text-sm font-medium flex items-center gap-2 transition-all ${activeTab === tab.id ? 'bg-indigo-600 text-white shadow' : 'text-gray-600 hover:bg-gray-50'}`}>
@@ -890,7 +916,7 @@
                             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-in fade-in duration-500">
                                 <div className="lg:col-span-2 space-y-6">
                                     <div className="bg-white rounded-xl shadow p-6 border border-gray-100">
-                                        <h2 className="text-lg font-bold mb-4 flex items-center gap-2"><Move className="w-5 h-5 text-indigo-600"/> 性能ポジショニングマップ</h2>
+                                        <h2 className="text-lg font-bold mb-4 flex items-center gap-2"><Icons.Move className="w-5 h-5 text-indigo-600"/> 性能ポジショニングマップ</h2>
                                         <div className="relative w-full h-64 bg-gray-50 rounded border p-4 select-none">
                                             <div className="absolute top-2 left-1/2 -translate-x-1/2 text-[10px] font-bold text-gray-400 bg-white px-2 rounded border">ロバスト性 (高)</div>
                                             <div className="absolute bottom-2 left-1/2 -translate-x-1/2 text-[10px] font-bold text-gray-400">ロバスト性 (低)</div>
@@ -906,17 +932,17 @@
                                         </div>
                                     </div>
                                     <div className="bg-white rounded-xl shadow overflow-hidden border border-gray-100">
-                                        <div className="p-3 bg-gray-50 border-b font-bold text-gray-700 flex items-center gap-2"><Layers className="w-4 h-4"/> 機能比較</div>
+                                        <div className="p-3 bg-gray-50 border-b font-bold text-gray-700 flex items-center gap-2"><Icons.Layers className="w-4 h-4"/> 機能比較</div>
                                         <table className="w-full text-sm text-left">
                                             <thead className="bg-white text-gray-500 font-medium border-b">
                                                 <tr><th className="px-4 py-2">名前</th><th className="px-4 py-2 text-center">回転不変</th><th className="px-4 py-2 text-center">スケール不変</th><th className="px-4 py-2 hidden sm:table-cell">速度</th></tr>
                                             </thead>
                                             <tbody className="divide-y divide-gray-100">
-                                                <tr className="bg-blue-50/50"><td colSpan="4" className="px-4 py-1 text-xs font-bold text-blue-600 uppercase flex gap-2"><Search className="w-3 h-3"/> 検出器 (Detector)</td></tr>
+                                                <tr className="bg-blue-50/50"><td colSpan="4" className="px-4 py-1 text-xs font-bold text-blue-600 uppercase flex gap-2"><Icons.Search className="w-3 h-3"/> 検出器 (Detector)</td></tr>
                                                 {detectors.map(renderAlgoRow)}
-                                                <tr className="bg-green-50/50"><td colSpan="4" className="px-4 py-1 text-xs font-bold text-green-600 uppercase flex gap-2"><FileText className="w-3 h-3"/> 記述子 (Descriptor)</td></tr>
+                                                <tr className="bg-green-50/50"><td colSpan="4" className="px-4 py-1 text-xs font-bold text-green-600 uppercase flex gap-2"><Icons.FileText className="w-3 h-3"/> 記述子 (Descriptor)</td></tr>
                                                 {descriptors.map(renderAlgoRow)}
-                                                <tr className="bg-purple-50/50"><td colSpan="4" className="px-4 py-1 text-xs font-bold text-purple-600 uppercase flex gap-2"><Layers className="w-3 h-3"/> 統合型 (Integrated)</td></tr>
+                                                <tr className="bg-purple-50/50"><td colSpan="4" className="px-4 py-1 text-xs font-bold text-purple-600 uppercase flex gap-2"><Icons.Layers className="w-3 h-3"/> 統合型 (Integrated)</td></tr>
                                                 {integrated.map(renderAlgoRow)}
                                             </tbody>
                                         </table>
@@ -932,8 +958,8 @@
                                         </div>
                                         <div className="p-5 flex-1 flex flex-col gap-4">
                                             <div><h4 className="text-xs font-bold text-gray-400 uppercase mb-1">概要</h4><p className="text-sm text-gray-700">{selectedAlgo.description}</p></div>
-                                            <div className="bg-green-50 p-2 rounded border border-green-100"><h4 className="text-green-800 text-xs font-bold flex items-center gap-1 mb-1"><Check className="w-3 h-3"/> メリット</h4><ul className="text-xs text-gray-700 space-y-1">{selectedAlgo.pros.map((p,i)=><li key={i} className="flex gap-1"><span className="text-green-500">•</span>{p}</li>)}</ul></div>
-                                            <div className="bg-red-50 p-2 rounded border border-red-100"><h4 className="text-red-800 text-xs font-bold flex items-center gap-1 mb-1"><Minus className="w-3 h-3"/> デメリット</h4><ul className="text-xs text-gray-700 space-y-1">{selectedAlgo.cons.map((c,i)=><li key={i} className="flex gap-1"><span className="text-red-400">•</span>{c}</li>)}</ul></div>
+                                            <div className="bg-green-50 p-2 rounded border border-green-100"><h4 className="text-green-800 text-xs font-bold flex items-center gap-1 mb-1"><Icons.Check className="w-3 h-3"/> メリット</h4><ul className="text-xs text-gray-700 space-y-1">{selectedAlgo.pros.map((p,i)=><li key={i} className="flex gap-1"><span className="text-green-500">•</span>{p}</li>)}</ul></div>
+                                            <div className="bg-red-50 p-2 rounded border border-red-100"><h4 className="text-red-800 text-xs font-bold flex items-center gap-1 mb-1"><Icons.Minus className="w-3 h-3"/> デメリット</h4><ul className="text-xs text-gray-700 space-y-1">{selectedAlgo.cons.map((c,i)=><li key={i} className="flex gap-1"><span className="text-red-400">•</span>{c}</li>)}</ul></div>
                                         </div>
                                     </div>
                                 </div>
@@ -949,28 +975,28 @@
                                 <div className="w-full bg-white rounded-xl shadow-lg border border-gray-100 p-8">
                                     <div className="flex flex-col md:flex-row gap-4 items-stretch justify-center relative mb-6">
                                         <div className="flex-1 bg-yellow-50 border border-yellow-200 rounded p-4 text-center">
-                                            <Zap className="w-8 h-8 text-yellow-500 mx-auto mb-2"/>
+                                            <Icons.Zap className="w-8 h-8 text-yellow-500 mx-auto mb-2"/>
                                             <h3 className="font-bold text-gray-800">FAST</h3>
                                             <div className="text-xs text-gray-500 mt-1">Detector</div>
-                                            <div className="mt-2 text-xs bg-white p-2 rounded border border-red-100 text-red-500 text-left"><X className="w-3 h-3 inline mr-1"/>回転に弱い</div>
+                                            <div className="mt-2 text-xs bg-white p-2 rounded border border-red-100 text-red-500 text-left"><Icons.X className="w-3 h-3 inline mr-1"/>回転に弱い</div>
                                         </div>
-                                        <div className="hidden md:flex items-center justify-center"><Plus className="w-6 h-6 text-gray-300"/></div>
+                                        <div className="hidden md:flex items-center justify-center"><Icons.Plus className="w-6 h-6 text-gray-300"/></div>
                                         <div className="flex-1 bg-green-50 border border-green-200 rounded p-4 text-center">
-                                            <Camera className="w-8 h-8 text-green-500 mx-auto mb-2"/>
+                                            <Icons.Camera className="w-8 h-8 text-green-500 mx-auto mb-2"/>
                                             <h3 className="font-bold text-gray-800">BRIEF</h3>
                                             <div className="text-xs text-gray-500 mt-1">Descriptor</div>
-                                            <div className="mt-2 text-xs bg-white p-2 rounded border border-red-100 text-red-500 text-left"><X className="w-3 h-3 inline mr-1"/>回転で値が変わる</div>
+                                            <div className="mt-2 text-xs bg-white p-2 rounded border border-red-100 text-red-500 text-left"><Icons.X className="w-3 h-3 inline mr-1"/>回転で値が変わる</div>
                                         </div>
                                     </div>
-                                    <div className="flex justify-center mb-6"><div className="bg-white px-3 py-1 rounded-full border border-indigo-100 text-xs font-bold text-indigo-600 shadow-sm flex items-center gap-1"><GitMerge className="w-3 h-3"/> 改良・統合</div></div>
+                                    <div className="flex justify-center mb-6"><div className="bg-white px-3 py-1 rounded-full border border-indigo-100 text-xs font-bold text-indigo-600 shadow-sm flex items-center gap-1"><Icons.GitMerge className="w-3 h-3"/> 改良・統合</div></div>
                                     <div className="bg-gradient-to-br from-red-50 to-indigo-50 border border-indigo-100 rounded-xl p-6 relative shadow-sm flex flex-col md:flex-row items-center gap-6">
-                                        <div className="shrink-0 text-center"><div className="w-16 h-16 bg-white rounded-full shadow flex items-center justify-center border-4 border-indigo-100 mx-auto mb-2"><Maximize className="w-8 h-8 text-red-500"/></div><h2 className="text-2xl font-black text-gray-800">ORB</h2></div>
+                                        <div className="shrink-0 text-center"><div className="w-16 h-16 bg-white rounded-full shadow flex items-center justify-center border-4 border-indigo-100 mx-auto mb-2"><Icons.Maximize className="w-8 h-8 text-red-500"/></div><h2 className="text-2xl font-black text-gray-800">ORB</h2></div>
                                         <div className="flex-1 space-y-2">
                                             <h3 className="font-bold text-indigo-900">Oriented FAST and Rotated BRIEF</h3>
                                             <p className="text-xs text-gray-600">SIFTに匹敵する性能を持ちながら、特許フリーで計算コストも低い。</p>
                                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2">
-                                                <div className="bg-white/80 p-2 rounded border border-indigo-100 flex items-center gap-2"><RotateCw className="w-3 h-3 text-yellow-600"/><span className="text-xs">Oriented FAST (回転耐性付与)</span></div>
-                                                <div className="bg-white/80 p-2 rounded border border-indigo-100 flex items-center gap-2"><RotateCw className="w-3 h-3 text-green-600"/><span className="text-xs">Rotated BRIEF (回転に合わせて記述)</span></div>
+                                                <div className="bg-white/80 p-2 rounded border border-indigo-100 flex items-center gap-2"><Icons.RotateCw className="w-3 h-3 text-yellow-600"/><span className="text-xs">Oriented FAST (回転耐性付与)</span></div>
+                                                <div className="bg-white/80 p-2 rounded border border-indigo-100 flex items-center gap-2"><Icons.RotateCw className="w-3 h-3 text-green-600"/><span className="text-xs">Rotated BRIEF (回転に合わせて記述)</span></div>
                                             </div>
                                         </div>
                                     </div>
@@ -988,14 +1014,14 @@
                                         </button>
                                     ))}
                                     <button onClick={() => setLearnAlgoId('hist')} className={`w-full text-left px-4 py-3 rounded-lg border transition-all flex items-center gap-3 ${learnAlgoId === 'hist' ? 'bg-gray-100 ring-1 ring-gray-300' : 'bg-white border-transparent hover:bg-white text-gray-600'}`}>
-                                        <Activity className="w-4 h-4"/><span className="font-bold text-sm">Histogram (Common)</span>
+                                        <Icons.Activity className="w-4 h-4"/><span className="font-bold text-sm">Histogram (Common)</span>
                                     </button>
                                 </div>
 
                                 <div className="md:col-span-3 space-y-6">
                                     <div className="bg-white p-6 rounded-xl shadow border border-gray-100">
                                         <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
-                                            {learnAlgoId === 'hist' ? <Activity className="w-6 h-6 text-indigo-500"/> : learnAlgo.icon}
+                                            {learnAlgoId === 'hist' ? <Icons.Activity className="w-6 h-6 text-indigo-500"/> : learnAlgo.icon}
                                             {learnAlgoId === 'hist' ? '勾配ヒストグラム (記述子の基礎)' : learnAlgo.name}
                                         </h2>
                                         {learnAlgoId !== 'hist' && (
@@ -1007,7 +1033,7 @@
 
                                     <div className="bg-white rounded-xl shadow border border-gray-100 overflow-hidden">
                                         <div className="p-3 bg-indigo-50 border-b border-indigo-100 flex items-center gap-2 font-bold text-indigo-900">
-                                            <Calculator className="w-4 h-4"/> 数値実験室 (Interactive Playground)
+                                            <Icons.Calculator className="w-4 h-4"/> 数値実験室 (Interactive Playground)
                                         </div>
                                         <div className="p-6">
                                             <p className="text-xs text-gray-500 mb-4">
@@ -1034,7 +1060,7 @@
 
                                     {learnAlgoId !== 'hist' && (
                                         <div className="bg-white p-6 rounded-xl shadow border border-gray-100">
-                                            <h3 className="font-bold text-gray-700 mb-4 flex items-center gap-2"><Target className="w-4 h-4"/> 処理ステップ詳細</h3>
+                                            <h3 className="font-bold text-gray-700 mb-4 flex items-center gap-2"><Icons.Target className="w-4 h-4"/> 処理ステップ詳細</h3>
                                             <div className="space-y-6">
                                                 {learnAlgo.steps?.map((step, i) => (
                                                     <div key={i} className="flex gap-4">
@@ -1061,7 +1087,7 @@
                         {activeTab === 'sim' && (
                             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-in fade-in duration-500">
                                 <div className="bg-white rounded-xl shadow p-6 border border-gray-100 h-fit">
-                                    <h2 className="text-lg font-bold mb-4 flex items-center gap-2 text-gray-700"><Settings className="w-5 h-5"/> 検証設定</h2>
+                                    <h2 className="text-lg font-bold mb-4 flex items-center gap-2 text-gray-700"><Icons.Settings className="w-5 h-5"/> 検証設定</h2>
                                     <div className="space-y-4">
                                         <div>
                                             <label className="text-xs font-bold text-gray-500 mb-2 block">アルゴリズム</label>
@@ -1074,20 +1100,20 @@
                                             </div>
                                         </div>
                                         <div className="pt-4 border-t">
-                                            <div className="flex justify-between mb-1"><label className="text-xs font-bold text-gray-500 flex items-center gap-1"><RotateCw className="w-3 h-3"/> 回転</label><span className="text-xs font-mono">{Math.round(rotation)}°</span></div>
+                                            <div className="flex justify-between mb-1"><label className="text-xs font-bold text-gray-500 flex items-center gap-1"><Icons.RotateCw className="w-3 h-3"/> 回転</label><span className="text-xs font-mono">{Math.round(rotation)}°</span></div>
                                             <input type="range" min="0" max="360" value={rotation} onChange={(e) => { setRotation(Number(e.target.value)); setIsAutoRotate(false); }} className="w-full h-2 bg-gray-200 rounded-lg cursor-pointer" />
                                             <button onClick={() => setIsAutoRotate(!isAutoRotate)} className={`mt-2 w-full text-xs py-1 rounded border flex justify-center items-center gap-1 ${isAutoRotate ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-50'}`}>{isAutoRotate ? '停止' : '自動回転'}</button>
                                         </div>
                                         <div>
-                                            <div className="flex justify-between mb-1"><label className="text-xs font-bold text-gray-500 flex items-center gap-1"><ZoomIn className="w-3 h-3"/> スケール</label><span className="text-xs font-mono">x{scale.toFixed(2)}</span></div>
+                                            <div className="flex justify-between mb-1"><label className="text-xs font-bold text-gray-500 flex items-center gap-1"><Icons.ZoomIn className="w-3 h-3"/> スケール</label><span className="text-xs font-mono">x{scale.toFixed(2)}</span></div>
                                             <input type="range" min="0.5" max="2.0" step="0.1" value={scale} onChange={(e) => setScale(Number(e.target.value))} className="w-full h-2 bg-gray-200 rounded-lg cursor-pointer" />
                                         </div>
-                                        <button onClick={() => { setRotation(0); setScale(1); setIsAutoRotate(false); }} className="w-full py-2 text-xs bg-gray-100 rounded hover:bg-gray-200 flex justify-center gap-2"><RefreshCw className="w-3 h-3"/> リセット</button>
+                                        <button onClick={() => { setRotation(0); setScale(1); setIsAutoRotate(false); }} className="w-full py-2 text-xs bg-gray-100 rounded hover:bg-gray-200 flex justify-center gap-2"><Icons.RefreshCw className="w-3 h-3"/> リセット</button>
                                     </div>
                                 </div>
                                 <div className="lg:col-span-2 flex flex-col">
                                     <div className="bg-white rounded-xl shadow border border-gray-100 p-1 flex-grow flex flex-col">
-                                        <div className="p-3 bg-gray-50 border-b rounded-t text-sm font-bold text-gray-700 flex items-center gap-2"><Activity className="w-4 h-4 text-indigo-600"/> リアルタイム検証: {simAlgo.name}</div>
+                                        <div className="p-3 bg-gray-50 border-b rounded-t text-sm font-bold text-gray-700 flex items-center gap-2"><Icons.Activity className="w-4 h-4 text-indigo-600"/> リアルタイム検証: {simAlgo.name}</div>
                                         <div className="flex-grow p-4 bg-gray-100 flex flex-col">
                                             <SimulationCanvas algoId={simAlgoId} rotation={rotation} scale={scale} />
                                             <div className="mt-4 bg-white p-4 rounded border shadow-sm">
