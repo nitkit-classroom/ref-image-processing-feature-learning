@@ -1,0 +1,1111 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>特徴点検出・記述アルゴリズム比較</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    
+    <!-- Babel (for JSX) -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Lucide Icons (UMD) -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://unpkg.com/lucide-react@latest/dist/umd/lucide-react.min.js"></script>
+
+    <style>
+        /* Custom scrollbar for better look */
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; }
+        ::-webkit-scrollbar-thumb { background: #c7c7cc; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #a1a1aa; }
+        body { background-color: #f9fafb; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        // Import components from global variables provided by UMD builds
+        const { useState, useEffect, useRef, useMemo } = React;
+        // lucide-react exports icons as properties of the global 'lucideReact' object
+        const { 
+            Camera, Zap, Shield, Move, Maximize, Target, Info, Check, X, Minus, 
+            Play, Settings, Activity, RotateCw, ZoomIn, RefreshCw, BookOpen, Code, 
+            ArrowRight, GitMerge, ArrowDown, Plus, Layers, Search, FileText, 
+            Calculator, Grid3x3, MousePointer2, PenTool 
+        } = lucideReact;
+
+        // --- Types & Helpers for Interactive Playground ---
+        // type GridData = number[][]; // TypeScript types removed for Babel standalone
+
+        const createGrid = (size, fill) => {
+            return Array(size).fill(0).map((_, y) => Array(size).fill(0).map((_, x) => 
+                typeof fill === 'function' ? fill(x, y) : fill
+            ));
+        };
+
+        // 7x7 Sample for L-corner
+        const initialHarrisGrid = createGrid(7, (x, y) => {
+            if (x < 3 && y < 3) return 50;  // Top-Left Dark
+            if (x >= 3 || y >= 3) return 200; // Bottom-Right Bright
+            return 50;
+        });
+
+        // 7x7 Sample for FAST
+        const initialFastGrid = createGrid(7, (x, y) => {
+            const cx = 3, cy = 3;
+            const isCircle = 
+                (x===3 && y===0) || (x===4 && y===0) || (x===5 && y===1) || (x===6 && y===2) ||
+                (x===6 && y===3) || (x===6 && y===4) || (x===5 && y===5) || (x===4 && y===6) ||
+                (x===3 && y===6) || (x===2 && y===6) || (x===1 && y===5) || (x===0 && y===4) ||
+                (x===0 && y===3) || (x===0 && y===2) || (x===1 && y===1) || (x===2 && y===0);
+            if (x === cx && y === cy) return 50;
+            if (isCircle) return 200;
+            return 100;
+        });
+
+        // --- Data Definition ---
+        const algorithms = [
+            {
+                id: 'harris',
+                name: 'Harris Corner',
+                fullName: 'Harris Corner Detector',
+                type: 'Detector',
+                category: 'detector',
+                year: 1988,
+                speed: 60, 
+                robustness: 40,
+                rotationInvariant: true,
+                scaleInvariant: false,
+                description: '画像の輝度変化（勾配）を用いてコーナーを検出する古典的アルゴリズム。回転には強いが、画像の拡大縮小（スケール変化）には弱い。',
+                pros: ['回転に対してロバスト', '実装が比較的容易', 'エッジとコーナーを明確に区別'],
+                cons: ['スケール変化に弱い', '計算コストが少し高い', 'サブピクセル精度は追加処理が必要'],
+                visualStyle: 'corner',
+                simSpeed: 15,
+                icon: <Target className="w-6 h-6 text-blue-500" />,
+                color: 'bg-blue-50 border-blue-200',
+                simNote: 'スケールを大きく変化させるとコーナーを認識できなくなります。',
+                opencv: "dst = cv2.cornerHarris(gray, 2, 3, 0.04)",
+                steps: [
+                { title: "微分画像の計算", desc: "画像のX方向・Y方向の勾配(Ix, Iy)をSobelフィルタ等で計算します。平坦な場所は0、エッジ部分は大きな値になります。" },
+                { title: "構造テンソルの生成", desc: "各画素の周辺ウィンドウ内で、勾配の積の和(Ix², Iy², IxIy)を計算し、行列Mを作ります。これで「どの方向に輝度が変化しているか」を要約します。" },
+                { title: "コーナー応答値Rの計算", desc: "行列Mの固有値を直接求めず、行列式とトレースを用いてスコアRを算出します(R = det(M) - k(trace(M))²)。" },
+                { title: "閾値処理", desc: "スコアRが閾値より大きい画素をコーナーとして抽出します。Rが負ならエッジ、0付近なら平坦とみなされます。" }
+                ]
+            },
+            {
+                id: 'fast',
+                name: 'FAST',
+                fullName: 'Features from Accelerated Segment Test',
+                type: 'Detector',
+                category: 'detector',
+                year: 2006,
+                speed: 95,
+                robustness: 20,
+                rotationInvariant: false,
+                scaleInvariant: false,
+                description: '中心画素と周囲の円周上の画素を比較するだけの非常にシンプルなロジック。機械学習を用いて高速化されており、リアルタイム処理に最適。',
+                pros: ['圧倒的に高速', '計算資源が少ない環境でも動作', 'リアルタイムSLAMなどで活躍'],
+                cons: ['ノイズに弱い場合がある', '回転・スケール不変性がない', 'エッジ上の点も検出しやすい'],
+                visualStyle: 'point',
+                simSpeed: 2,
+                icon: <Zap className="w-6 h-6 text-yellow-500" />,
+                color: 'bg-yellow-50 border-yellow-200',
+                simNote: '非常に高速ですが、回転やスケール変化で特徴点が不安定になります。',
+                opencv: "fast = cv2.FastFeatureDetector_create()\\nkp = fast.detect(gray, None)",
+                steps: [
+                { title: "注目画素の選定", desc: "画像内の画素Pを選択し、その輝度Ipを取得します。これを基準として周囲と比較します。" },
+                { title: "円周上の画素比較", desc: "Pを中心とする半径3の円周上にある16個の画素の輝度を調査します。円周上の各画素がIpより「明るい」か「暗い」か判定します。" },
+                { title: "連続性のテスト", desc: "Ipより「明るい」または「暗い」画素が、円周上でN個（通常9〜12個）連続しているか判定します。" },
+                { title: "高速化", desc: "全16画素を見ずに、まず上下左右の4点で可能性を棄却するなどの最適化が行われています。" }
+                ]
+            },
+            {
+                id: 'sift',
+                name: 'SIFT',
+                fullName: 'Scale-Invariant Feature Transform',
+                type: 'Detector + Descriptor',
+                category: 'integrated',
+                year: 1999,
+                speed: 20,
+                robustness: 95,
+                rotationInvariant: true,
+                scaleInvariant: true,
+                description: '画像のスケール空間で極値を探索し、勾配ヒストグラムで記述する。回転・スケール・照明変化に対して非常に強力だが、計算が重い。',
+                pros: ['スケール・回転に対して非常にロバスト', '照明変化にも強い', '高精度なマッチングが可能'],
+                cons: ['計算負荷が非常に高い', '特許で保護されていた（現在は失効）', 'リアルタイム処理には不向き'],
+                visualStyle: 'vector_circle',
+                simSpeed: 80,
+                icon: <Shield className="w-6 h-6 text-purple-500" />,
+                color: 'bg-purple-50 border-purple-200',
+                simNote: 'どのような変形を加えても安定して追従しますが、処理時間が長くなります。',
+                opencv: "sift = cv2.SIFT_create()\\nkp, des = sift.detectAndCompute(gray, None)",
+                steps: [
+                { title: "DoGによる極値検出", desc: "画像を様々な倍率でぼかしたDoG (Difference of Gaussian) 画像を作り、その中から極値を探します。" },
+                { title: "キーポイントの洗練", desc: "不安定な点やエッジ上の点を除去し、位置をサブピクセル精度で特定します。" },
+                { title: "オリエンテーション付与", desc: "キーポイント周辺の勾配方向のヒストグラムを作成し、ピークとなる方向をその特徴点の「向き」として割り当てます。これで回転不変になります。" },
+                { title: "記述子の生成", desc: "キーポイント周辺を4x4のブロックに分割し、各ブロックの勾配ヒストグラムを計算。計128次元のベクトルにします。" }
+                ]
+            },
+            {
+                id: 'brief',
+                name: 'BRIEF',
+                fullName: 'Binary Robust Independent Elementary Features',
+                type: 'Descriptor',
+                category: 'descriptor',
+                year: 2010,
+                speed: 90,
+                robustness: 30,
+                rotationInvariant: false,
+                scaleInvariant: false,
+                description: '特徴点周辺のピクセルペアの輝度大小関係をバイナリ列（0と1）で表現する。ハミング距離で高速にマッチングできるが、単体では回転に弱い。',
+                pros: ['記述子の生成・マッチングが非常に高速', 'メモリ効率が良い', 'FAST等の検出器と組み合わせて使う'],
+                cons: ['回転・スケール不変性がない', '単体では特徴点検出機能を持たない'],
+                visualStyle: 'binary_match',
+                simSpeed: 4,
+                icon: <Camera className="w-6 h-6 text-green-500" />,
+                color: 'bg-green-50 border-green-200',
+                simNote: '回転させるとビットパターンが変化し、マッチングに失敗します（赤色表示）。',
+                opencv: "brief = cv2.xfeatures2d.BriefDescriptorExtractor_create()\\n# FAST等でkpを検出後に使用\\nkp, des = brief.compute(gray, kp)",
+                steps: [
+                { title: "スムージング", desc: "ノイズの影響を減らすため、特徴点周辺の画像をガウシアンカーネルで平滑化します。" },
+                { title: "ペアの選択", desc: "特徴点周辺の領域内で、予め決められたパターンに従ってN組のピクセルペア(p1, p2)を選びます。" },
+                { title: "バイナリテスト", desc: "各ペアについて輝度を比較し、p1 < p2 なら1、そうでなければ0と判定します。" },
+                { title: "ビット列生成", desc: "上記のテスト結果を並べ、128, 256, 512ビットなどのバイナリストリング（記述子）を生成します。" }
+                ]
+            },
+            {
+                id: 'orb',
+                name: 'ORB',
+                fullName: 'Oriented FAST and Rotated BRIEF',
+                type: 'Detector + Descriptor',
+                category: 'integrated',
+                year: 2011,
+                speed: 80,
+                robustness: 75,
+                rotationInvariant: true,
+                scaleInvariant: true,
+                description: 'FASTに方向付けを加え、BRIEFに回転耐性を持たせた改良版。SIFTの有力な無料代替手段として開発された。速度と精度のバランスが良い。',
+                pros: ['SIFT/SURFより高速', '回転・スケール不変性を持つ', '特許フリーで使いやすい'],
+                cons: ['SIFTほどの極端な変形耐性はない', 'エイリアシングの影響を受けやすい'],
+                visualStyle: 'vector_fast',
+                simSpeed: 10,
+                icon: <Maximize className="w-6 h-6 text-red-500" />,
+                color: 'bg-red-50 border-red-200',
+                simNote: 'SIFT同様に追従しつつ、処理速度も高速に保たれます。',
+                opencv: "orb = cv2.ORB_create()\\nkp, des = orb.detectAndCompute(gray, None)",
+                steps: [
+                { title: "oFAST (Oriented FAST)", desc: "FASTでキーポイントを検出し、スケールピラミッドでスケール不変性を確保します。" },
+                { title: "ハリススコアによる選別", desc: "検出された多数の点から、Harrisコーナースコアが高い上位N個を選抜します。" },
+                { title: "方向の計算", desc: "「Intensity Centroid」法を用いて、特徴点周辺の輝度の重心を求め、中心から重心へのベクトルで方向を決定します。" },
+                { title: "rBRIEF (Rotated BRIEF)", desc: "検出された方向に応じてBRIEFのペアパターンを回転させ、回転不変な記述子を生成します。" }
+                ]
+            }
+        ];
+
+        // --- Components ---
+
+        const StepVisual = ({ algoId, stepIndex }) => {
+            const commonClass = "w-full h-24 bg-white border border-gray-100 rounded-md flex items-center justify-center relative overflow-hidden";
+            
+            // Harris Visualization
+            if (algoId === 'harris') {
+                if (stepIndex === 0) { // Gradient
+                return (
+                    <div className={commonClass}>
+                    <div className="grid grid-cols-3 gap-1 opacity-20 absolute w-full h-full"><div className="bg-gray-200"></div><div className="bg-gray-300"></div><div className="bg-gray-200"></div></div>
+                    <div className="z-10 flex gap-4">
+                        <div className="flex flex-col items-center"><span className="text-xs font-bold">X微分</span><ArrowRight className="w-6 h-6 text-blue-500" /></div>
+                        <div className="flex flex-col items-center"><span className="text-xs font-bold">Y微分</span><ArrowRight className="w-6 h-6 text-blue-500 rotate-90" /></div>
+                    </div>
+                    </div>
+                );
+                }
+                if (stepIndex === 1) { // Structure Tensor
+                return (
+                    <div className={commonClass}>
+                    <div className="text-center">
+                        <div className="text-xs text-gray-400 mb-1">周辺ウィンドウの集計</div>
+                        <div className="grid grid-cols-2 gap-px bg-gray-300 p-px rounded w-16 mx-auto">
+                        <div className="bg-blue-50 p-1 text-[8px] text-center">I<sub className="scale-75">x</sub>²</div>
+                        <div className="bg-blue-50 p-1 text-[8px] text-center">I<sub className="scale-75">x</sub>I<sub className="scale-75">y</sub></div>
+                        <div className="bg-blue-50 p-1 text-[8px] text-center">I<sub className="scale-75">x</sub>I<sub className="scale-75">y</sub></div>
+                        <div className="bg-blue-50 p-1 text-[8px] text-center">I<sub className="scale-75">y</sub>²</div>
+                        </div>
+                        <div className="mt-1 text-xs font-serif font-bold text-gray-600">M (行列)</div>
+                    </div>
+                    </div>
+                );
+                }
+                if (stepIndex === 2) { // Score
+                return (
+                    <div className={commonClass}>
+                    <div className="flex items-end gap-1 h-16 w-32 border-l border-b border-gray-300 p-1 relative">
+                        <div className="text-[9px] absolute -left-6 top-0 rotate-[-90deg]">λ2 (固有値)</div>
+                        <div className="text-[9px] absolute right-0 -bottom-4">λ1 (固有値)</div>
+                        <div className="absolute bottom-1 left-1 w-4 h-4 bg-gray-100 border border-gray-200 rounded-sm flex items-center justify-center text-[6px]">平坦</div>
+                        <div className="absolute bottom-1 right-2 w-8 h-2 bg-yellow-100 border border-yellow-200 rounded-sm flex items-center justify-center text-[6px]">エッジ</div>
+                        <div className="absolute top-2 left-2 w-2 h-8 bg-yellow-100 border border-yellow-200 rounded-sm flex items-center justify-center text-[6px]"></div>
+                        <div className="absolute top-2 right-2 w-8 h-8 bg-red-100 border border-red-200 rounded-full flex items-center justify-center text-[6px] font-bold text-red-800">コーナー</div>
+                    </div>
+                    </div>
+                );
+                }
+                if (stepIndex === 3) { // Threshold
+                return (
+                    <div className={commonClass}>
+                    <div className="flex flex-col items-center w-full px-8">
+                        <div className="w-full h-8 bg-gradient-to-r from-gray-200 via-yellow-200 to-red-400 rounded relative">
+                        <div className="absolute right-1/4 top-0 bottom-0 w-0.5 bg-black dashed"></div>
+                        <div className="absolute -top-3 right-1/4 text-[9px] font-bold">閾値</div>
+                        </div>
+                        <div className="flex justify-between w-full text-[9px] mt-1 text-gray-500">
+                        <span>Low (平坦)</span>
+                        <span>High (コーナー)</span>
+                        </div>
+                    </div>
+                    </div>
+                );
+                }
+            }
+
+            // FAST Visualization
+            if (algoId === 'fast') {
+                if (stepIndex === 0) { // Pixel P
+                return (
+                    <div className={commonClass}>
+                    <div className="grid grid-cols-7 gap-px bg-gray-100 p-1 rounded">
+                        {Array(49).fill(0).map((_, i) => (
+                        <div key={i} className={`w-2 h-2 ${i === 24 ? 'bg-yellow-500' : 'bg-white'}`}></div>
+                        ))}
+                    </div>
+                    <div className="ml-4 text-xs font-bold text-yellow-600">P (中心)</div>
+                    </div>
+                );
+                }
+                if (stepIndex === 1) { // Circle
+                return (
+                    <div className={commonClass}>
+                    <div className="relative w-16 h-16 bg-gray-50 border border-gray-200 rounded grid grid-cols-7 grid-rows-7 p-0.5 gap-px">
+                        <div className="absolute inset-0 flex items-center justify-center">
+                        <div className="w-2 h-2 bg-black rounded-full"></div>
+                        </div>
+                        <div className="absolute inset-0 border-2 border-dashed border-blue-300 rounded-full scale-75"></div>
+                        {[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15].map((i) => {
+                        const angle = (i / 16) * Math.PI * 2;
+                        const r = 24;
+                        const x = 32 + r * Math.cos(angle);
+                        const y = 32 + r * Math.sin(angle);
+                        return <div key={i} className="absolute w-1.5 h-1.5 bg-blue-500 rounded-full" style={{left: x-3, top: y-3}}></div>
+                        })}
+                    </div>
+                    </div>
+                );
+                }
+                if (stepIndex === 2) { // Contiguity
+                return (
+                    <div className={commonClass}>
+                    <div className="relative w-16 h-16 flex items-center justify-center">
+                        <div className="w-2 h-2 bg-yellow-600 rounded-full z-10"></div>
+                        <svg viewBox="0 0 100 100" className="absolute w-full h-full rotate-[-45deg]">
+                        <path d="M 50 50 L 85 15 A 50 50 0 0 1 85 85 Z" fill="rgba(255,0,0,0.2)" stroke="red" />
+                        </svg>
+                        <div className="absolute text-[8px] bg-white border border-red-200 px-1 rounded -bottom-2 text-red-600 font-bold">連続N画素</div>
+                    </div>
+                    </div>
+                );
+                }
+                if (stepIndex === 3) { // Quick Test
+                return (
+                    <div className={commonClass}>
+                    <div className="relative w-16 h-16 bg-gray-50 border rounded-full flex items-center justify-center">
+                        <div className="w-1 h-1 bg-black rounded-full"></div>
+                        <div className="absolute top-1 w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                        <div className="absolute bottom-1 w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                        <div className="absolute left-1 w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                        <div className="absolute right-1 w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                        <div className="absolute text-[8px] text-green-700 font-bold bg-white/80 px-1 rounded top-1/2 -translate-y-1/2">高速チェック</div>
+                    </div>
+                    </div>
+                );
+                }
+            }
+
+            // SIFT Visualization
+            if (algoId === 'sift') {
+                if (stepIndex === 0) { // DoG
+                return (
+                    <div className={commonClass}>
+                    <div className="flex items-center gap-2">
+                        <div className="flex flex-col -space-y-6 transform scale-75">
+                        <div className="w-16 h-12 bg-gray-800 rounded shadow-sm z-10 opacity-30"></div>
+                        <div className="w-16 h-12 bg-gray-600 rounded shadow-sm z-20 opacity-50 transform translate-x-1"></div>
+                        <div className="w-16 h-12 bg-gray-400 rounded shadow-sm z-30 opacity-70 transform translate-x-2"></div>
+                        <div className="w-16 h-12 bg-gray-200 rounded shadow-sm z-40 transform translate-x-3 border border-gray-400 flex items-center justify-center text-[8px]">DoG</div>
+                        </div>
+                        <ArrowRight className="w-4 h-4 text-gray-400" />
+                        <Target className="w-6 h-6 text-purple-600 animate-bounce" />
+                    </div>
+                    </div>
+                );
+                }
+                if (stepIndex === 2) { // Orientation
+                return (
+                    <div className={commonClass}>
+                    <div className="relative w-16 h-16 border-2 border-gray-200 rounded-full flex items-center justify-center bg-gray-50">
+                        {[0,45,90,135,180,225,270,315].map(deg => (
+                        <div key={deg} className="absolute w-1 bg-purple-200 origin-bottom bottom-1/2 left-1/2 -translate-x-1/2" 
+                                style={{height: Math.random()*16 + 4, transform: `rotate(${deg}deg)`}}></div>
+                        ))}
+                        <div className="absolute w-1 h-8 bg-purple-600 origin-bottom bottom-1/2 left-1/2 -translate-x-1/2 rotate-[45deg] flex justify-center">
+                            <div className="w-2 h-2 border-t-2 border-r-2 border-purple-600 transform -rotate-45 absolute -top-1"></div>
+                        </div>
+                    </div>
+                    </div>
+                );
+                }
+                if (stepIndex === 3) { // Descriptor
+                return (
+                    <div className={commonClass}>
+                    <div className="grid grid-cols-4 grid-rows-4 w-16 h-16 border border-gray-300 bg-white">
+                        {Array(16).fill(0).map((_,i) => (
+                        <div key={i} className="border-[0.5px] border-gray-100 flex items-center justify-center">
+                            <ArrowRight className="w-2 h-2 text-purple-600" style={{transform: `rotate(${Math.random()*360}deg)`}} />
+                        </div>
+                        ))}
+                    </div>
+                    <div className="ml-3 text-[10px] text-gray-500 font-mono flex flex-col items-center">
+                        <span>4x4 blocks</span>
+                        <span className="text-xl">↓</span>
+                        <span className="font-bold text-purple-700">128 dim</span>
+                    </div>
+                    </div>
+                );
+                }
+            }
+
+            // BRIEF Visualization
+            if (algoId === 'brief') {
+                if (stepIndex === 1) { // Pairs
+                return (
+                    <div className={commonClass}>
+                    <div className="relative w-16 h-16 bg-gray-50 border border-gray-200 rounded">
+                        <div className="absolute top-2 left-2 w-1.5 h-1.5 bg-green-500 rounded-full"></div>
+                        <div className="absolute bottom-4 right-3 w-1.5 h-1.5 bg-green-500 rounded-full"></div>
+                        <svg className="absolute inset-0 w-full h-full pointer-events-none">
+                        <line x1="12" y1="12" x2="52" y2="48" stroke="green" strokeWidth="1" strokeDasharray="2 1" />
+                        </svg>
+                        <div className="absolute top-4 right-4 w-1.5 h-1.5 bg-blue-500 rounded-full"></div>
+                        <div className="absolute bottom-2 left-6 w-1.5 h-1.5 bg-blue-500 rounded-full"></div>
+                        <svg className="absolute inset-0 w-full h-full pointer-events-none">
+                        <line x1="50" y1="20" x2="28" y2="56" stroke="blue" strokeWidth="1" strokeDasharray="2 1" />
+                        </svg>
+                    </div>
+                    <div className="ml-2 text-[10px] text-gray-500">Random Pairs</div>
+                    </div>
+                );
+                }
+                if (stepIndex === 2) { // Binary Test
+                return (
+                    <div className={commonClass}>
+                    <div className="flex items-center gap-2 font-mono text-sm">
+                        <div className="flex flex-col items-center">
+                        <div className="w-8 h-8 bg-gray-800 rounded text-white flex items-center justify-center text-xs">P1</div>
+                        <span className="text-[10px] mt-1">150</span>
+                        </div>
+                        <span className="text-gray-400">&lt;</span>
+                        <div className="flex flex-col items-center">
+                        <div className="w-8 h-8 bg-gray-300 rounded text-gray-800 flex items-center justify-center text-xs">P2</div>
+                        <span className="text-[10px] mt-1">200</span>
+                        </div>
+                        <ArrowRight className="w-4 h-4 text-gray-400 mx-1" />
+                        <div className="w-8 h-8 bg-green-100 border border-green-500 text-green-700 rounded flex items-center justify-center font-bold">1</div>
+                    </div>
+                    </div>
+                );
+                }
+                if (stepIndex === 3) { // Bitstring
+                return (
+                    <div className={commonClass}>
+                    <div className="font-mono text-lg tracking-widest text-green-700 break-all w-3/4 text-center">
+                        1001101...
+                    </div>
+                    <div className="absolute right-2 bottom-1 text-[8px] text-gray-400">Descriptor</div>
+                    </div>
+                );
+                }
+            }
+
+            // ORB Visualization
+            if (algoId === 'orb') {
+                if (stepIndex === 0) { // Pyramid
+                return (
+                    <div className={commonClass}>
+                    <div className="flex flex-col items-center -space-y-4">
+                        <div className="w-8 h-6 bg-red-200 border border-red-300 z-30"></div>
+                        <div className="w-16 h-10 bg-red-100 border border-red-300 z-20"></div>
+                        <div className="w-24 h-14 bg-gray-50 border border-red-300 z-10 flex items-end justify-center pb-1">
+                        <span className="text-[9px] text-gray-500">Scale Pyramid</span>
+                        </div>
+                    </div>
+                    </div>
+                );
+                }
+                if (stepIndex === 2) { // Centroid
+                return (
+                    <div className={commonClass}>
+                    <div className="relative w-16 h-16 bg-gray-50 border border-gray-200 rounded-full">
+                        <div className="absolute top-1/2 left-1/2 w-1.5 h-1.5 bg-black rounded-full -translate-x-1/2 -translate-y-1/2"></div>
+                        <div className="absolute top-3 right-4 w-3 h-3 bg-red-500 rounded-full opacity-50 blur-[2px]"></div>
+                        <svg className="absolute inset-0 w-full h-full">
+                        <line x1="32" y1="32" x2="48" y2="20" stroke="red" strokeWidth="2" markerEnd="url(#arrow)" />
+                        </svg>
+                        <div className="absolute bottom-1 w-full text-center text-[8px] text-red-600">Centroid Vector</div>
+                    </div>
+                    </div>
+                );
+                }
+                if (stepIndex === 3) { // Rotated BRIEF
+                return (
+                    <div className={commonClass}>
+                    <div className="relative w-16 h-16 flex items-center justify-center">
+                        <div className="absolute inset-0 border border-dashed border-gray-300 rounded"></div>
+                        <div className="absolute inset-0 border border-red-300 rounded transform rotate-12 flex items-center justify-center">
+                            <div className="w-full h-full grid grid-cols-4 grid-rows-4 p-2 opacity-50">
+                            <div className="bg-red-500 w-1 h-1 rounded-full"></div>
+                            </div>
+                        </div>
+                        <RotateCw className="absolute -top-1 -right-1 w-4 h-4 text-gray-500" />
+                    </div>
+                    <div className="ml-3 text-[10px] text-gray-500 flex flex-col">
+                        <span>Steered</span>
+                        <span>Pattern</span>
+                    </div>
+                    </div>
+                );
+                }
+            }
+
+            // Fallback generic visual
+            return (
+                <div className={commonClass}>
+                <Activity className="w-6 h-6 text-gray-300" />
+                <span className="text-xs text-gray-400 ml-2">Processing...</span>
+                </div>
+            );
+        };
+
+        const GridCell = ({ value, x, y, onChange, readOnly, bgClass }) => {
+            const [strVal, setStrVal] = useState(value.toString());
+
+            useEffect(() => {
+                const currentParsed = strVal === '' ? 0 : parseInt(strVal, 10);
+                if (!isNaN(currentParsed) && currentParsed !== value) {
+                    setStrVal(value.toString());
+                }
+            }, [value]);
+
+            const handleChange = (e) => {
+                const val = e.target.value;
+                if (val !== '' && !/^\d+$/.test(val)) return;
+                setStrVal(val);
+                if (onChange) {
+                    const numVal = val === '' ? 0 : Math.max(0, Math.min(255, parseInt(val, 10)));
+                    onChange(x, y, numVal);
+                }
+            };
+
+            const handleBlur = () => {
+                if (strVal === '') {
+                    setStrVal('0');
+                } else {
+                    setStrVal(Math.max(0, Math.min(255, parseInt(strVal, 10))).toString());
+                }
+            };
+
+            return (
+                <input
+                    type="text"
+                    value={strVal}
+                    readOnly={readOnly}
+                    onChange={handleChange}
+                    onBlur={handleBlur}
+                    onFocus={(e) => !readOnly && e.target.select()}
+                    className={`w-8 h-8 text-[10px] text-center outline-none focus:bg-indigo-50 focus:ring-2 focus:ring-indigo-500 z-10 transition-colors ${bgClass} ${readOnly ? 'cursor-default' : 'cursor-text text-indigo-700 font-bold'}`}
+                />
+            );
+        };
+
+        const EditableGrid = ({ data, onChange, highlightIndices = [], readOnly = false }) => {
+            const handleCellChange = (x, y, val) => {
+                if (onChange) {
+                    const newData = data.map((row, rY) => 
+                        row.map((cell, rX) => (rX === x && rY === y) ? val : cell)
+                    );
+                    onChange(newData);
+                }
+            };
+
+            return (
+                <div className="flex flex-col items-center">
+                    <div className="grid gap-px bg-gray-300 border border-gray-300 rounded overflow-hidden" 
+                        style={{ gridTemplateColumns: `repeat(${data[0].length}, minmax(0, 1fr))` }}>
+                        {data.map((row, y) => row.map((val, x) => {
+                            const highlight = highlightIndices.find((h) => h.x === x && h.y === y);
+                            const bgClass = highlight ? (highlight.color || 'bg-yellow-200') : 'bg-white';
+                            return (
+                                <GridCell 
+                                    key={`${x}-${y}`}
+                                    x={x} 
+                                    y={y} 
+                                    value={val} 
+                                    onChange={readOnly ? undefined : handleCellChange} 
+                                    readOnly={readOnly}
+                                    bgClass={bgClass}
+                                />
+                            );
+                        }))}
+                    </div>
+                </div>
+            );
+        };
+
+        const HarrisPlayground = () => {
+            const [grid, setGrid] = useState(initialHarrisGrid);
+            const k = 0.04;
+            let sumIx2 = 0, sumIy2 = 0, sumIxIy = 0;
+            for(let wy = -1; wy <= 1; wy++) {
+                for(let wx = -1; wx <= 1; wx++) {
+                    const px = 3 + wx;
+                    const py = 3 + wy;
+                    const ix = (grid[py][px+1] - grid[py][px-1]) / 2;
+                    const iy = (grid[py+1][px] - grid[py-1][px]) / 2;
+                    sumIx2 += ix * ix; sumIy2 += iy * iy; sumIxIy += ix * iy;
+                }
+            }
+            const det = sumIx2 * sumIy2 - sumIxIy * sumIxIy;
+            const trace = sumIx2 + sumIy2;
+            const r = det - k * (trace * trace);
+
+            return (
+                <div className="flex flex-col md:flex-row gap-6 mt-4 p-4 bg-blue-50/50 rounded-lg border border-blue-100">
+                    <div>
+                        <h5 className="text-xs font-bold text-gray-600 mb-2 flex items-center gap-1"><PenTool className="w-3 h-3"/> 入力画像 (7x7)</h5>
+                        <EditableGrid data={grid} onChange={setGrid} highlightIndices={[{x:3, y:3, color: 'bg-yellow-100 ring-2 ring-yellow-400 inset'}]} />
+                    </div>
+                    <div className="flex-1 space-y-3">
+                        <div className="bg-white p-3 rounded border shadow-sm">
+                            <div className="text-[10px] text-gray-500 font-bold mb-1">計算結果 (中央3x3領域)</div>
+                            <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                                <div className="bg-blue-50 p-1 rounded"><div>∑Ix²</div><div className="font-bold text-blue-700">{sumIx2.toFixed(0)}</div></div>
+                                <div className="bg-purple-50 p-1 rounded"><div>∑IxIy</div><div className="font-bold text-purple-700">{sumIxIy.toFixed(0)}</div></div>
+                                <div className="bg-blue-50 p-1 rounded"><div>∑Iy²</div><div className="font-bold text-blue-700">{sumIy2.toFixed(0)}</div></div>
+                            </div>
+                        </div>
+                        <div className="bg-white p-3 rounded border shadow-sm flex items-center justify-between">
+                            <div className="text-xs">
+                                <div>det: {(det/1e6).toFixed(1)}M</div>
+                                <div>trace: {(trace/1e3).toFixed(1)}k</div>
+                            </div>
+                            <div className={`text-right ${r > 1e8 ? 'text-red-600' : 'text-gray-400'}`}>
+                                <div className="text-[10px]">Score R</div>
+                                <div className="font-bold text-lg">{r.toExponential(1)}</div>
+                                <div className="text-[10px] font-bold">{r > 1e8 ? "CORNER!" : r < -1e7 ? "EDGE" : "FLAT"}</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const FastPlayground = () => {
+            const [grid, setGrid] = useState(initialFastGrid);
+            const threshold = 50;
+            const offsets = [[0,-3],[1,-3],[2,-2],[3,-1],[3,0],[3,1],[2,2],[1,3],[0,3],[-1,3],[-2,2],[-3,1],[-3,0],[-3,-1],[-2,-2],[-1,-3]];
+            const cx = 3, cy = 3;
+            const pVal = grid[cy][cx];
+            
+            const circlePixels = offsets.map(([ox, oy], i) => {
+                const x = cx + ox, y = cy + oy;
+                const val = grid[y][x];
+                let status = 'same';
+                if (val > pVal + threshold) status = 'brighter';
+                if (val < pVal - threshold) status = 'darker';
+                return { x, y, val, status, idx: i };
+            });
+
+            let maxCont = 0;
+            const stats = [...circlePixels, ...circlePixels];
+            let current = 0;
+            let type = '';
+            for (const p of stats) {
+                if (p.status !== 'same' && (type === '' || p.status === type)) {
+                    current++; type = p.status;
+                } else {
+                    maxCont = Math.max(maxCont, current); current = p.status !== 'same' ? 1 : 0; type = p.status !== 'same' ? p.status : '';
+                }
+            }
+            const continuousCount = Math.max(maxCont, current);
+
+            return (
+                <div className="flex flex-col md:flex-row gap-6 mt-4 p-4 bg-yellow-50/50 rounded-lg border border-yellow-100">
+                    <div>
+                        <h5 className="text-xs font-bold text-gray-600 mb-2 flex items-center gap-1"><PenTool className="w-3 h-3"/> 入力画像</h5>
+                        <EditableGrid data={grid} onChange={setGrid} highlightIndices={[
+                            {x: cx, y: cy, color: 'bg-yellow-200 ring-2 ring-yellow-500'},
+                            ...circlePixels.map(p => ({x: p.x, y: p.y, color: p.status === 'brighter' ? 'bg-red-100 text-red-600' : p.status === 'darker' ? 'bg-blue-100 text-blue-600' : 'bg-gray-50'}))
+                        ]} />
+                    </div>
+                    <div className="flex-1 space-y-3">
+                        <div className="bg-white p-3 rounded border shadow-sm">
+                            <div className="text-[10px] text-gray-500 font-bold mb-2">円周上の画素判定 (閾値: {threshold})</div>
+                            <div className="flex flex-wrap gap-1">
+                                {circlePixels.map((p, i) => (
+                                    <div key={i} className={`w-5 h-6 flex items-center justify-center text-[8px] rounded border ${p.status === 'brighter' ? 'bg-red-100 text-red-700 border-red-200' : p.status === 'darker' ? 'bg-blue-100 text-blue-700 border-blue-200' : 'bg-gray-50 text-gray-300'}`}>
+                                        {p.status === 'brighter' ? 'B' : p.status === 'darker' ? 'D' : '-'}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                        <div className={`p-3 rounded border text-center ${continuousCount >= 9 ? 'bg-green-100 text-green-800 border-green-300' : 'bg-gray-50 text-gray-500'}`}>
+                            <div className="text-xs font-bold">連続数: {continuousCount} (必要: 9)</div>
+                            <div className="font-bold text-sm mt-1">{continuousCount >= 9 ? "FEATURE DETECTED!" : "No Feature"}</div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const SiftDogPlayground = () => {
+            const [scale1, setScale1] = useState(createGrid(5, 100));
+            const [scale2, setScale2] = useState(createGrid(5, (x,y) => (x===2 && y===2) ? 180 : 100));
+            const dogGrid = scale1.map((row, y) => row.map((val, x) => scale2[y][x] - val));
+            const cx = 2, cy = 2;
+            const cVal = dogGrid[cy][cx];
+            let isExtr = true;
+            for(let y=0;y<5;y++) for(let x=0;x<5;x++) {
+                if(x===cx && y===cy) continue;
+                if(Math.abs(dogGrid[y][x]) >= Math.abs(cVal)) isExtr = false;
+            }
+            if (Math.abs(cVal) < 10) isExtr = false;
+
+            return (
+                <div className="mt-4 p-4 bg-purple-50/50 rounded-lg border border-purple-100">
+                    <div className="flex justify-center gap-2 mb-4 text-center">
+                        <div><div className="text-[9px] text-gray-500">Scale 1</div><EditableGrid data={scale1} onChange={setScale1} /></div>
+                        <div className="flex items-center text-gray-400"><Minus className="w-4 h-4"/></div>
+                        <div><div className="text-[9px] text-gray-500">Scale 2</div><EditableGrid data={scale2} onChange={setScale2} /></div>
+                        <div className="flex items-center text-gray-400"><ArrowRight className="w-4 h-4"/></div>
+                        <div><div className="text-[9px] text-purple-700 font-bold">DoG</div><EditableGrid data={dogGrid} readOnly highlightIndices={isExtr ? [{x:2, y:2, color: 'bg-purple-200 ring-2 ring-purple-500'}] : []} /></div>
+                    </div>
+                    <div className={`text-center text-xs font-bold ${isExtr ? 'text-green-600' : 'text-gray-400'}`}>
+                        中央(2,2)のDoG値 {cVal} は極値{isExtr ? "です (検出！)" : "ではありません"}
+                    </div>
+                </div>
+            );
+        };
+
+        const HistogramPlayground = () => {
+            const [grid, setGrid] = useState(createGrid(5, (x,y) => x * 40 + y * 40));
+            const bins = Array(8).fill(0);
+            for(let y=1; y<4; y++) for(let x=1; x<4; x++) {
+                const dx = grid[y][x+1] - grid[y][x-1];
+                const dy = grid[y+1][x] - grid[y-1][x];
+                const mag = Math.sqrt(dx*dx + dy*dy);
+                let angle = Math.atan2(dy, dx) * (180 / Math.PI);
+                if (angle < 0) angle += 360;
+                bins[Math.floor(angle / 45) % 8] += mag;
+            }
+            const max = Math.max(...bins, 1);
+
+            return (
+                <div className="flex gap-6 mt-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
+                    <div>
+                        <h5 className="text-xs font-bold text-gray-600 mb-2">入力パッチ</h5>
+                        <EditableGrid data={grid} onChange={setGrid} />
+                    </div>
+                    <div className="flex-1 flex flex-col justify-end h-32">
+                        <h5 className="text-xs font-bold text-gray-600 mb-2 text-center">勾配方向ヒストグラム (Orientation)</h5>
+                        <div className="flex items-end justify-between h-full gap-1">
+                            {bins.map((val, i) => (
+                                <div key={i} className="flex-1 flex flex-col items-center group relative">
+                                    <div className="w-full bg-indigo-500 rounded-t hover:bg-indigo-600 transition-all" style={{height: `${(val/max)*100}%`, minHeight:'2px'}}></div>
+                                    <div className="text-[8px] mt-1 text-gray-500">{i*45}°</div>
+                                    <div className="absolute -top-4 text-[9px] bg-black text-white px-1 rounded opacity-0 group-hover:opacity-100">{val.toFixed(0)}</div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const SimulationCanvas = ({ algoId, rotation, scale }) => {
+            const canvasRef = useRef(null);
+            const [metrics, setMetrics] = useState({ processingTime: 0, points: 0, status: 'Stable' });
+            const algo = algorithms.find(a => a.id === algoId);
+
+            useEffect(() => {
+                if (!algo || !canvasRef.current) return;
+                const ctx = canvasRef.current.getContext('2d');
+                if (!ctx) return;
+
+                const width = canvasRef.current.width;
+                const height = canvasRef.current.height;
+                const centerX = width / 2;
+                const centerY = height / 2;
+
+                ctx.clearRect(0, 0, width, height);
+                
+                ctx.strokeStyle = '#f0f0f0'; ctx.lineWidth = 1;
+                for(let i=0; i<width; i+=20) { ctx.beginPath(); ctx.moveTo(i,0); ctx.lineTo(i,height); ctx.stroke(); }
+                for(let i=0; i<height; i+=20) { ctx.beginPath(); ctx.moveTo(0,i); ctx.lineTo(width,i); ctx.stroke(); }
+
+                const baseSize = 80;
+                const points = [{x: -baseSize, y: -baseSize}, {x: baseSize, y: -baseSize}, {x: baseSize, y: baseSize}, {x: -baseSize, y: baseSize}];
+                const rad = (rotation * Math.PI) / 180;
+                const cos = Math.cos(rad), sin = Math.sin(rad);
+                const transform = (p) => ({
+                    x: (p.x * scale * cos - p.y * scale * sin) + centerX,
+                    y: (p.x * scale * sin + p.y * scale * cos) + centerY
+                });
+                const tPoints = points.map(transform);
+
+                ctx.beginPath();
+                ctx.moveTo(tPoints[0].x, tPoints[0].y);
+                tPoints.forEach((p, i) => { if(i>0) ctx.lineTo(p.x, p.y) });
+                ctx.closePath();
+                ctx.strokeStyle = '#333'; ctx.lineWidth = 2; ctx.fillStyle = 'rgba(200, 200, 200, 0.2)';
+                ctx.fill(); ctx.stroke();
+
+                let isStable = true;
+                if (!algo.rotationInvariant && Math.abs(rotation % 360) > 15) isStable = false;
+                if (!algo.scaleInvariant && (scale < 0.8 || scale > 1.2)) isStable = false;
+                if (algo.id === 'harris' && (scale < 0.7 || scale > 1.3)) isStable = false; 
+
+                tPoints.forEach(p => {
+                    if (!isStable) {
+                        ctx.fillStyle = 'rgba(255, 0, 0, 0.5)';
+                        ctx.beginPath(); ctx.arc(p.x, p.y, 5, 0, Math.PI * 2); ctx.fill();
+                        return;
+                    }
+                    ctx.fillStyle = '#00ff00'; ctx.strokeStyle = '#008800';
+                    if (algo.visualStyle === 'corner') {
+                        ctx.strokeRect(p.x - 6, p.y - 6, 12, 12); ctx.fillRect(p.x - 6, p.y - 6, 12, 12);
+                    } else if (algo.visualStyle === 'vector_circle') {
+                        const s = 10 * scale;
+                        ctx.beginPath(); ctx.arc(p.x, p.y, s, 0, Math.PI*2); ctx.stroke();
+                        ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x + s * Math.cos(rad), p.y + s * Math.sin(rad)); ctx.stroke();
+                    } else {
+                        ctx.beginPath(); ctx.arc(p.x, p.y, 4, 0, Math.PI*2); ctx.fill();
+                    }
+                });
+
+                setMetrics({
+                    processingTime: Math.round((algo.simSpeed * (algo.id === 'sift' ? scale : 1)) * 10) / 10,
+                    points: isStable ? 4 : 0,
+                    status: isStable ? '安定 (Stable)' : '検出失敗 / 不安定'
+                });
+            }, [algoId, rotation, scale]);
+
+            return (
+                <div className="relative bg-gray-900 rounded-lg overflow-hidden flex-grow shadow-inner border border-gray-700 h-64 w-full">
+                    <canvas ref={canvasRef} width={400} height={256} className="w-full h-full object-contain" />
+                    <div className="absolute top-2 left-2 text-[10px] font-mono text-green-400 bg-black/70 p-2 rounded">
+                        <div>TIME: {metrics.processingTime} ms</div>
+                        <div className={metrics.status.includes('安定') ? 'text-blue-400' : 'text-red-500'}>{metrics.status}</div>
+                    </div>
+                </div>
+            );
+        };
+
+        const FeatureComparisonApp = () => {
+            const [activeTab, setActiveTab] = useState('info');
+            const [selectedAlgoId, setSelectedAlgoId] = useState(null);
+            
+            const [simAlgoId, setSimAlgoId] = useState('harris');
+            const [rotation, setRotation] = useState(0);
+            const [scale, setScale] = useState(1);
+            const [isAutoRotate, setIsAutoRotate] = useState(false);
+
+            const [learnAlgoId, setLearnAlgoId] = useState('harris');
+
+            const selectedAlgo = algorithms.find(a => a.id === selectedAlgoId) || algorithms[0];
+            const simAlgo = algorithms.find(a => a.id === simAlgoId) || algorithms[0];
+            const learnAlgo = algorithms.find(a => a.id === learnAlgoId) || algorithms[0];
+
+            useEffect(() => {
+                let interval;
+                if (isAutoRotate) {
+                    interval = setInterval(() => setRotation(p => (p + 1) % 360), 30);
+                }
+                return () => clearInterval(interval);
+            }, [isAutoRotate]);
+
+            const detectors = algorithms.filter(a => a.category === 'detector');
+            const descriptors = algorithms.filter(a => a.category === 'descriptor');
+            const integrated = algorithms.filter(a => a.category === 'integrated');
+
+            const renderAlgoRow = (algo) => (
+                <tr key={algo.id} onClick={() => setSelectedAlgoId(algo.id)} className={`cursor-pointer hover:bg-indigo-50 ${selectedAlgoId === algo.id ? 'bg-indigo-50' : ''}`}>
+                    <td className="px-4 py-2 font-bold text-indigo-900 flex items-center gap-2">{algo.icon}{algo.name}</td>
+                    <td className="px-4 py-2 text-center">{algo.rotationInvariant ? <Check className="w-4 h-4 mx-auto text-green-500"/> : <X className="w-4 h-4 mx-auto text-red-400"/>}</td>
+                    <td className="px-4 py-2 text-center">{algo.scaleInvariant ? <Check className="w-4 h-4 mx-auto text-green-500"/> : <X className="w-4 h-4 mx-auto text-red-400"/>}</td>
+                    <td className="px-4 py-2 text-xs text-gray-500 hidden sm:table-cell">{algo.simSpeed < 10 ? "超高速" : "中〜低速"}</td>
+                </tr>
+            );
+
+            return (
+                <div className="min-h-screen bg-gray-50 p-4 md:p-8 font-sans text-gray-800">
+                    <div className="max-w-6xl mx-auto mb-6">
+                        <div className="text-center mb-6">
+                            <h1 className="text-3xl font-bold text-indigo-900 mb-1">特徴点検出・記述アルゴリズム比較</h1>
+                            <p className="text-gray-600 text-sm">仕組みの理解から数値実験、ロバスト性の検証まで</p>
+                        </div>
+
+                        <div className="flex justify-center mb-6 overflow-x-auto">
+                            <div className="bg-white p-1 rounded-lg shadow border inline-flex whitespace-nowrap">
+                                {[
+                                    { id: 'info', icon: <Info className="w-4 h-4"/>, label: '解説・比較' },
+                                    { id: 'relation', icon: <GitMerge className="w-4 h-4"/>, label: '関係性マップ' },
+                                    { id: 'learn', icon: <BookOpen className="w-4 h-4"/>, label: '仕組みを学ぶ (実験室)' },
+                                    { id: 'sim', icon: <Activity className="w-4 h-4"/>, label: 'シミュレーション' },
+                                ].map(tab => (
+                                    <button key={tab.id} onClick={() => setActiveTab(tab.id)}
+                                        className={`px-4 py-2 rounded text-sm font-medium flex items-center gap-2 transition-all ${activeTab === tab.id ? 'bg-indigo-600 text-white shadow' : 'text-gray-600 hover:bg-gray-50'}`}>
+                                        {tab.icon}{tab.label}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+
+                        {activeTab === 'info' && (
+                            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-in fade-in duration-500">
+                                <div className="lg:col-span-2 space-y-6">
+                                    <div className="bg-white rounded-xl shadow p-6 border border-gray-100">
+                                        <h2 className="text-lg font-bold mb-4 flex items-center gap-2"><Move className="w-5 h-5 text-indigo-600"/> 性能ポジショニングマップ</h2>
+                                        <div className="relative w-full h-64 bg-gray-50 rounded border p-4 select-none">
+                                            <div className="absolute top-2 left-1/2 -translate-x-1/2 text-[10px] font-bold text-gray-400 bg-white px-2 rounded border">ロバスト性 (高)</div>
+                                            <div className="absolute bottom-2 left-1/2 -translate-x-1/2 text-[10px] font-bold text-gray-400">ロバスト性 (低)</div>
+                                            <div className="absolute right-2 top-1/2 -translate-y-1/2 -rotate-90 text-[10px] font-bold text-gray-400">速度 (速)</div>
+                                            <div className="absolute left-2 top-1/2 -translate-y-1/2 -rotate-90 text-[10px] font-bold text-gray-400">速度 (遅)</div>
+                                            <div className="absolute inset-4 border-l border-b border-gray-300"></div>
+                                            {algorithms.map(algo => (
+                                                <button key={algo.id} onClick={() => setSelectedAlgoId(algo.id)} className={`absolute transform -translate-x-1/2 translate-y-1/2 transition-all hover:scale-110 ${selectedAlgoId === algo.id ? 'scale-125 z-10' : ''}`} style={{left: `${algo.speed}%`, bottom: `${algo.robustness}%`}}>
+                                                    <div className={`w-8 h-8 rounded-full shadow flex items-center justify-center border-2 ${selectedAlgoId === algo.id ? 'bg-indigo-50 border-indigo-600' : 'bg-white border-white'}`}>{algo.icon}</div>
+                                                    <div className="text-[10px] font-bold bg-white/80 px-1 rounded shadow-sm mt-1 whitespace-nowrap">{algo.name}</div>
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                    <div className="bg-white rounded-xl shadow overflow-hidden border border-gray-100">
+                                        <div className="p-3 bg-gray-50 border-b font-bold text-gray-700 flex items-center gap-2"><Layers className="w-4 h-4"/> 機能比較</div>
+                                        <table className="w-full text-sm text-left">
+                                            <thead className="bg-white text-gray-500 font-medium border-b">
+                                                <tr><th className="px-4 py-2">名前</th><th className="px-4 py-2 text-center">回転不変</th><th className="px-4 py-2 text-center">スケール不変</th><th className="px-4 py-2 hidden sm:table-cell">速度</th></tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-gray-100">
+                                                <tr className="bg-blue-50/50"><td colSpan="4" className="px-4 py-1 text-xs font-bold text-blue-600 uppercase flex gap-2"><Search className="w-3 h-3"/> 検出器 (Detector)</td></tr>
+                                                {detectors.map(renderAlgoRow)}
+                                                <tr className="bg-green-50/50"><td colSpan="4" className="px-4 py-1 text-xs font-bold text-green-600 uppercase flex gap-2"><FileText className="w-3 h-3"/> 記述子 (Descriptor)</td></tr>
+                                                {descriptors.map(renderAlgoRow)}
+                                                <tr className="bg-purple-50/50"><td colSpan="4" className="px-4 py-1 text-xs font-bold text-purple-600 uppercase flex gap-2"><Layers className="w-3 h-3"/> 統合型 (Integrated)</td></tr>
+                                                {integrated.map(renderAlgoRow)}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                                <div className="lg:col-span-1">
+                                    <div className={`h-full bg-white rounded-xl shadow border-t-4 transition-all flex flex-col ${selectedAlgoId === 'harris' ? 'border-blue-500' : selectedAlgoId === 'fast' ? 'border-yellow-500' : selectedAlgoId === 'sift' ? 'border-purple-500' : 'border-green-500'}`}>
+                                        <div className={`p-5 ${selectedAlgo.color}`}>
+                                            <div className="flex justify-between mb-2"><div className="p-2 bg-white rounded shadow-sm">{selectedAlgo.icon}</div><span className="text-xs font-mono text-gray-500 bg-white/50 px-2 py-1 rounded">{selectedAlgo.year}年</span></div>
+                                            <h2 className="text-xl font-bold text-gray-900">{selectedAlgo.name}</h2>
+                                            <div className="text-xs text-gray-500 mb-2">{selectedAlgo.fullName}</div>
+                                            <span className="inline-block px-2 py-0.5 rounded bg-white/60 text-xs font-bold text-gray-700 border border-gray-200">{selectedAlgo.type}</span>
+                                        </div>
+                                        <div className="p-5 flex-1 flex flex-col gap-4">
+                                            <div><h4 className="text-xs font-bold text-gray-400 uppercase mb-1">概要</h4><p className="text-sm text-gray-700">{selectedAlgo.description}</p></div>
+                                            <div className="bg-green-50 p-2 rounded border border-green-100"><h4 className="text-green-800 text-xs font-bold flex items-center gap-1 mb-1"><Check className="w-3 h-3"/> メリット</h4><ul className="text-xs text-gray-700 space-y-1">{selectedAlgo.pros.map((p,i)=><li key={i} className="flex gap-1"><span className="text-green-500">•</span>{p}</li>)}</ul></div>
+                                            <div className="bg-red-50 p-2 rounded border border-red-100"><h4 className="text-red-800 text-xs font-bold flex items-center gap-1 mb-1"><Minus className="w-3 h-3"/> デメリット</h4><ul className="text-xs text-gray-700 space-y-1">{selectedAlgo.cons.map((c,i)=><li key={i} className="flex gap-1"><span className="text-red-400">•</span>{c}</li>)}</ul></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {activeTab === 'relation' && (
+                            <div className="max-w-4xl mx-auto flex flex-col items-center justify-center min-h-[500px] animate-in fade-in duration-500">
+                                <div className="text-center mb-8">
+                                    <h2 className="text-2xl font-bold text-gray-800">FAST + BRIEF = ORB</h2>
+                                    <p className="text-gray-500 text-sm mt-2">高速な検出器(FAST)と高速な記述子(BRIEF)を改良・融合させた「いいとこ取り」の手法</p>
+                                </div>
+                                <div className="w-full bg-white rounded-xl shadow-lg border border-gray-100 p-8">
+                                    <div className="flex flex-col md:flex-row gap-4 items-stretch justify-center relative mb-6">
+                                        <div className="flex-1 bg-yellow-50 border border-yellow-200 rounded p-4 text-center">
+                                            <Zap className="w-8 h-8 text-yellow-500 mx-auto mb-2"/>
+                                            <h3 className="font-bold text-gray-800">FAST</h3>
+                                            <div className="text-xs text-gray-500 mt-1">Detector</div>
+                                            <div className="mt-2 text-xs bg-white p-2 rounded border border-red-100 text-red-500 text-left"><X className="w-3 h-3 inline mr-1"/>回転に弱い</div>
+                                        </div>
+                                        <div className="hidden md:flex items-center justify-center"><Plus className="w-6 h-6 text-gray-300"/></div>
+                                        <div className="flex-1 bg-green-50 border border-green-200 rounded p-4 text-center">
+                                            <Camera className="w-8 h-8 text-green-500 mx-auto mb-2"/>
+                                            <h3 className="font-bold text-gray-800">BRIEF</h3>
+                                            <div className="text-xs text-gray-500 mt-1">Descriptor</div>
+                                            <div className="mt-2 text-xs bg-white p-2 rounded border border-red-100 text-red-500 text-left"><X className="w-3 h-3 inline mr-1"/>回転で値が変わる</div>
+                                        </div>
+                                    </div>
+                                    <div className="flex justify-center mb-6"><div className="bg-white px-3 py-1 rounded-full border border-indigo-100 text-xs font-bold text-indigo-600 shadow-sm flex items-center gap-1"><GitMerge className="w-3 h-3"/> 改良・統合</div></div>
+                                    <div className="bg-gradient-to-br from-red-50 to-indigo-50 border border-indigo-100 rounded-xl p-6 relative shadow-sm flex flex-col md:flex-row items-center gap-6">
+                                        <div className="shrink-0 text-center"><div className="w-16 h-16 bg-white rounded-full shadow flex items-center justify-center border-4 border-indigo-100 mx-auto mb-2"><Maximize className="w-8 h-8 text-red-500"/></div><h2 className="text-2xl font-black text-gray-800">ORB</h2></div>
+                                        <div className="flex-1 space-y-2">
+                                            <h3 className="font-bold text-indigo-900">Oriented FAST and Rotated BRIEF</h3>
+                                            <p className="text-xs text-gray-600">SIFTに匹敵する性能を持ちながら、特許フリーで計算コストも低い。</p>
+                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2">
+                                                <div className="bg-white/80 p-2 rounded border border-indigo-100 flex items-center gap-2"><RotateCw className="w-3 h-3 text-yellow-600"/><span className="text-xs">Oriented FAST (回転耐性付与)</span></div>
+                                                <div className="bg-white/80 p-2 rounded border border-indigo-100 flex items-center gap-2"><RotateCw className="w-3 h-3 text-green-600"/><span className="text-xs">Rotated BRIEF (回転に合わせて記述)</span></div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {activeTab === 'learn' && (
+                            <div className="grid grid-cols-1 md:grid-cols-4 gap-6 animate-in fade-in duration-500">
+                                <div className="md:col-span-1 space-y-2">
+                                    <h3 className="font-bold text-gray-500 text-xs uppercase tracking-wider mb-2 px-2">アルゴリズム選択</h3>
+                                    {algorithms.map(algo => (
+                                        <button key={algo.id} onClick={() => setLearnAlgoId(algo.id)} className={`w-full text-left px-4 py-3 rounded-lg border transition-all flex items-center gap-3 ${learnAlgoId === algo.id ? `${algo.color} ring-1 ring-indigo-200` : 'bg-white border-transparent hover:bg-white text-gray-600'}`}>
+                                            {algo.icon}<span className={`font-bold text-sm ${learnAlgoId === algo.id ? 'text-indigo-900' : ''}`}>{algo.name}</span>
+                                        </button>
+                                    ))}
+                                    <button onClick={() => setLearnAlgoId('hist')} className={`w-full text-left px-4 py-3 rounded-lg border transition-all flex items-center gap-3 ${learnAlgoId === 'hist' ? 'bg-gray-100 ring-1 ring-gray-300' : 'bg-white border-transparent hover:bg-white text-gray-600'}`}>
+                                        <Activity className="w-4 h-4"/><span className="font-bold text-sm">Histogram (Common)</span>
+                                    </button>
+                                </div>
+
+                                <div className="md:col-span-3 space-y-6">
+                                    <div className="bg-white p-6 rounded-xl shadow border border-gray-100">
+                                        <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
+                                            {learnAlgoId === 'hist' ? <Activity className="w-6 h-6 text-indigo-500"/> : learnAlgo.icon}
+                                            {learnAlgoId === 'hist' ? '勾配ヒストグラム (記述子の基礎)' : learnAlgo.name}
+                                        </h2>
+                                        {learnAlgoId !== 'hist' && (
+                                            <div className="mt-4 bg-gray-900 rounded p-3 text-xs font-mono text-gray-300 overflow-x-auto">
+                                                <pre>{learnAlgo.opencv}</pre>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    <div className="bg-white rounded-xl shadow border border-gray-100 overflow-hidden">
+                                        <div className="p-3 bg-indigo-50 border-b border-indigo-100 flex items-center gap-2 font-bold text-indigo-900">
+                                            <Calculator className="w-4 h-4"/> 数値実験室 (Interactive Playground)
+                                        </div>
+                                        <div className="p-6">
+                                            <p className="text-xs text-gray-500 mb-4">
+                                                以下のグリッド数値を変更して、アルゴリズムがどう反応するかリアルタイムで確認できます。
+                                            </p>
+                                            {learnAlgoId === 'harris' && <HarrisPlayground />}
+                                            {learnAlgoId === 'fast' && <FastPlayground />}
+                                            {learnAlgoId === 'sift' && <SiftDogPlayground />}
+                                            {learnAlgoId === 'orb' && (
+                                                <div className="text-center text-sm text-gray-500 p-8 bg-gray-50 rounded">
+                                                    ORBはFASTとBRIEF(回転対応版)の組み合わせです。<br/>
+                                                    <span className="font-bold text-indigo-600 cursor-pointer underline" onClick={()=>setLearnAlgoId('fast')}>FASTの実験</span> と <span className="font-bold text-indigo-600 cursor-pointer underline" onClick={()=>setLearnAlgoId('hist')}>ヒストグラム(方向)の実験</span> を参照してください。
+                                                </div>
+                                            )}
+                                            {learnAlgoId === 'brief' && (
+                                                <div className="text-center text-sm text-gray-500 p-8 bg-gray-50 rounded">
+                                                    BRIEFは単純なピクセル比較です。<br/>
+                                                    FASTの実験での「明/暗」判定ロジックが基礎となります。
+                                                </div>
+                                            )}
+                                            {learnAlgoId === 'hist' && <HistogramPlayground />}
+                                        </div>
+                                    </div>
+
+                                    {learnAlgoId !== 'hist' && (
+                                        <div className="bg-white p-6 rounded-xl shadow border border-gray-100">
+                                            <h3 className="font-bold text-gray-700 mb-4 flex items-center gap-2"><Target className="w-4 h-4"/> 処理ステップ詳細</h3>
+                                            <div className="space-y-6">
+                                                {learnAlgo.steps?.map((step, i) => (
+                                                    <div key={i} className="flex gap-4">
+                                                        <div className="flex flex-col items-center">
+                                                            <div className="w-6 h-6 rounded-full bg-indigo-100 text-indigo-600 font-bold flex items-center justify-center text-xs">{i+1}</div>
+                                                            {i < (learnAlgo.steps?.length || 0)-1 && <div className="w-px h-full bg-indigo-100 my-1"></div>}
+                                                        </div>
+                                                        <div className="flex-1">
+                                                            <h4 className="font-bold text-sm text-gray-800 mb-2">{step.title}</h4>
+                                                            <div className="mb-3 max-w-sm">
+                                                                <StepVisual algoId={learnAlgo.id} stepIndex={i} />
+                                                            </div>
+                                                            <p className="text-xs text-gray-600 leading-relaxed">{step.desc}</p>
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+
+                        {activeTab === 'sim' && (
+                            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-in fade-in duration-500">
+                                <div className="bg-white rounded-xl shadow p-6 border border-gray-100 h-fit">
+                                    <h2 className="text-lg font-bold mb-4 flex items-center gap-2 text-gray-700"><Settings className="w-5 h-5"/> 検証設定</h2>
+                                    <div className="space-y-4">
+                                        <div>
+                                            <label className="text-xs font-bold text-gray-500 mb-2 block">アルゴリズム</label>
+                                            <div className="space-y-2">
+                                                {algorithms.map(algo => (
+                                                    <button key={algo.id} onClick={() => setSimAlgoId(algo.id)} className={`w-full flex items-center p-2 rounded border text-left text-sm ${simAlgoId === algo.id ? `${algo.color} ring-1 ring-indigo-300` : 'bg-white hover:bg-gray-50'}`}>
+                                                        <div className="mr-2">{algo.icon}</div>{algo.name}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
+                                        <div className="pt-4 border-t">
+                                            <div className="flex justify-between mb-1"><label className="text-xs font-bold text-gray-500 flex items-center gap-1"><RotateCw className="w-3 h-3"/> 回転</label><span className="text-xs font-mono">{Math.round(rotation)}°</span></div>
+                                            <input type="range" min="0" max="360" value={rotation} onChange={(e) => { setRotation(Number(e.target.value)); setIsAutoRotate(false); }} className="w-full h-2 bg-gray-200 rounded-lg cursor-pointer" />
+                                            <button onClick={() => setIsAutoRotate(!isAutoRotate)} className={`mt-2 w-full text-xs py-1 rounded border flex justify-center items-center gap-1 ${isAutoRotate ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-50'}`}>{isAutoRotate ? '停止' : '自動回転'}</button>
+                                        </div>
+                                        <div>
+                                            <div className="flex justify-between mb-1"><label className="text-xs font-bold text-gray-500 flex items-center gap-1"><ZoomIn className="w-3 h-3"/> スケール</label><span className="text-xs font-mono">x{scale.toFixed(2)}</span></div>
+                                            <input type="range" min="0.5" max="2.0" step="0.1" value={scale} onChange={(e) => setScale(Number(e.target.value))} className="w-full h-2 bg-gray-200 rounded-lg cursor-pointer" />
+                                        </div>
+                                        <button onClick={() => { setRotation(0); setScale(1); setIsAutoRotate(false); }} className="w-full py-2 text-xs bg-gray-100 rounded hover:bg-gray-200 flex justify-center gap-2"><RefreshCw className="w-3 h-3"/> リセット</button>
+                                    </div>
+                                </div>
+                                <div className="lg:col-span-2 flex flex-col">
+                                    <div className="bg-white rounded-xl shadow border border-gray-100 p-1 flex-grow flex flex-col">
+                                        <div className="p-3 bg-gray-50 border-b rounded-t text-sm font-bold text-gray-700 flex items-center gap-2"><Activity className="w-4 h-4 text-indigo-600"/> リアルタイム検証: {simAlgo.name}</div>
+                                        <div className="flex-grow p-4 bg-gray-100 flex flex-col">
+                                            <SimulationCanvas algoId={simAlgoId} rotation={rotation} scale={scale} />
+                                            <div className="mt-4 bg-white p-4 rounded border shadow-sm">
+                                                <h4 className="text-xs font-bold text-gray-700 mb-1">検証ポイント</h4>
+                                                <p className="text-xs text-gray-600">{simAlgo.simNote}</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<FeatureComparisonApp />);
+    </script>
+</body>
+</html>
